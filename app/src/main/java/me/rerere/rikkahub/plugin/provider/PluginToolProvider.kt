@@ -1,4 +1,4 @@
-﻿/*
+/*
  * 橘瓣 OrangeChat
  * 衍生自 RikkaHub (https://github.com/rikkahub/rikkahub)，原作者 RE
  * 本项目基于 GNU AGPL v3 开源，详见根目录 LICENSE 文件
@@ -26,7 +26,8 @@ import me.rerere.rikkahub.plugin.model.PluginToolDefinition
  */
 class PluginToolProvider(
     private val pluginLoader: PluginLoader,
-    private val pluginManager: PluginManager
+    private val pluginManager: PluginManager,
+    private val imageResults: PluginImageResults
 ) {
     private val json = Json {
         ignoreUnknownKeys = true
@@ -136,8 +137,7 @@ class PluginToolProvider(
 
         return result.fold(
             onSuccess = { jsonElement ->
-                val resultStr = json.encodeToString(JsonElement.serializer(), jsonElement)
-                listOf(UIMessagePart.Text(resultStr))
+                imageResults.convert(plugin.manifest.id, jsonElement)
             },
             onFailure = { error ->
                 val errorObj = buildJsonObject {

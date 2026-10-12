@@ -1,4 +1,4 @@
-﻿/*
+/*
  * 橘瓣 OrangeChat
  * 衍生自 RikkaHub (https://github.com/rikkahub/rikkahub)，原作者 RE
  * 本项目基于 GNU AGPL v3 开源，详见根目录 LICENSE 文件
@@ -10,6 +10,7 @@ import me.rerere.rikkahub.data.datastore.SettingsStore
 import me.rerere.rikkahub.data.service.MemoryBankService
 import me.rerere.rikkahub.plugin.loader.PluginLoader
 import me.rerere.rikkahub.plugin.manager.PluginManager
+import me.rerere.rikkahub.plugin.provider.PluginImageResults
 import me.rerere.rikkahub.plugin.provider.PluginToolProvider
 import me.rerere.rikkahub.plugin.repository.PluginRepository
 import me.rerere.rikkahub.plugin.scanner.PluginScanner
@@ -36,7 +37,8 @@ val pluginModule = module {
     single { PluginManager(androidContext(), get(), get(), get(), get(), get()) }
 
     // Provider - 需要PluginManager来确保插件已初始化
-    single { PluginToolProvider(get(), get()) }
+    single { PluginImageResults(androidContext(), get<me.rerere.rikkahub.data.files.FilesManager>()) }
+    single { PluginToolProvider(get(), get(), get()) }
 
     // ViewModel
     viewModel { PluginViewModel(get()) }
