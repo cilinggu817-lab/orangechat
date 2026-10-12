@@ -37,7 +37,7 @@ class PluginLoader(
  
     companion object {
         private const val TAG = "PluginLoader"
-        private const val CALL_TIMEOUT_MS = 16_500L
+        private const val CALL_TIMEOUT_MS = 65_000L
     }
  
     private val runtimes = PluginRuntimeRegistry<LoadedPlugin> { plugin ->

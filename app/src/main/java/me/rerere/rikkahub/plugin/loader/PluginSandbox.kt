@@ -364,9 +364,9 @@ function fetch(url, options) {
             }
  
             val fetchClient = okHttpClient.newBuilder()
-                .connectTimeout(15, TimeUnit.SECONDS)
-                .readTimeout(15, TimeUnit.SECONDS)
-                .writeTimeout(15, TimeUnit.SECONDS)
+                .connectTimeout(60, TimeUnit.SECONDS)
+                .readTimeout(60, TimeUnit.SECONDS)
+                .writeTimeout(60, TimeUnit.SECONDS)
                 // Explicit host restrictions must not be bypassed by a redirect.
                 .followRedirects(networkPolicy.allowsAllHosts)
                 .followSslRedirects(networkPolicy.allowsAllHosts)
