@@ -13,6 +13,9 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.toggleable
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AlertDialogDefaults
 import androidx.compose.material3.MaterialTheme
@@ -20,6 +23,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -32,6 +36,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Job
 import me.rerere.rikkahub.R
@@ -41,11 +46,12 @@ import me.rerere.rikkahub.ui.theme.popupContainerColor
 @Composable
 fun CompressContextDialog(
     onDismiss: () -> Unit,
-    onConfirm: (additionalPrompt: String, targetTokens: Int, keepRecentMessages: Int) -> Job
+    onConfirm: (additionalPrompt: String, targetTokens: Int, keepRecentMessages: Int, mergeWithPrevious: Boolean) -> Job
 ) {
     var additionalPrompt by remember { mutableStateOf("") }
     var selectedTokens by remember { mutableIntStateOf(2000) }
     var keepRecentMessages by remember { mutableIntStateOf(32) }
+    var mergeWithPrevious by remember { mutableStateOf(true) }
     val tokenOptions = listOf(500, 1000, 2000, 4000)
     val keepRecentOptions = listOf(0, 16, 32, 64)
     var currentJob by remember { mutableStateOf<Job?>(null) }
@@ -72,6 +78,7 @@ fun CompressContextDialog(
         },
         text = {
             Column(
+                modifier = Modifier.verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
                 if (isLoading) {
@@ -148,11 +155,35 @@ fun CompressContextDialog(
                         maxLines = 4,
                     )
 
+                    Row(
+                        modifier = Modifier.fillMaxWidth().toggleable(
+                            value = mergeWithPrevious,
+                            role = Role.Switch,
+                            onValueChange = { mergeWithPrevious = it },
+                        ),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(stringResource(R.string.chat_page_compress_merge_previous))
+                            Text(
+                                text = stringResource(if (mergeWithPrevious) {
+                                    R.string.chat_page_compress_merge_previous_on
+                                } else {
+                                    R.string.chat_page_compress_merge_previous_off
+                                }),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        Switch(checked = mergeWithPrevious, onCheckedChange = null)
+                    }
+
                     // Warning text
                     Text(
                         text = stringResource(R.string.chat_page_compress_warning),
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.error
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
             }
@@ -167,7 +198,7 @@ fun CompressContextDialog(
                 }
             } else {
                 TextButton(onClick = {
-                    currentJob = onConfirm(additionalPrompt, selectedTokens, keepRecentMessages)
+                    currentJob = onConfirm(additionalPrompt, selectedTokens, keepRecentMessages, mergeWithPrevious)
                 }) {
                     Text(stringResource(R.string.confirm))
                 }

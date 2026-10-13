@@ -43,7 +43,6 @@ import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
 import me.rerere.ai.ui.ToolApprovalState
 import me.rerere.ai.ui.handleMessageChunk
-import me.rerere.ai.ui.limitContext
 import me.rerere.rikkahub.data.ai.transformers.InputMessageTransformer
 import me.rerere.rikkahub.data.ai.transformers.MessageTransformer
 import me.rerere.rikkahub.data.ai.transformers.OutputMessageTransformer
@@ -101,6 +100,7 @@ class GenerationHandler(
         maxSteps: Int = 256,
         processingStatus: MutableStateFlow<String?> = MutableStateFlow(null),
         conversationSystemPrompt: String? = null,
+        conversationContextSummary: String? = null,
         workspaceCwd: String? = null,
         pluginPromptInjections: List<String> = emptyList(),
         conversationId: String? = null,
@@ -182,6 +182,7 @@ class GenerationHandler(
                     stream = assistant.streamOutput,
                     processingStatus = processingStatus,
                     conversationSystemPrompt = conversationSystemPrompt,
+                    conversationContextSummary = conversationContextSummary,
                     workspaceCwd = workspaceCwd,
                     conversationId = conversationId,
                 )
@@ -385,6 +386,7 @@ class GenerationHandler(
         stream: Boolean,
         processingStatus: MutableStateFlow<String?> = MutableStateFlow(null),
         conversationSystemPrompt: String? = null,
+        conversationContextSummary: String? = null,
         workspaceCwd: String? = null,
         conversationId: String? = null,
     ) {
@@ -558,8 +560,7 @@ class GenerationHandler(
                 }
  
             }
-            if (system.isNotBlank()) add(UIMessage.system(prompt = system))
-            addAll(messages.limitContext(assistant.contextMessageSize))
+            addAll(buildConversationRequestMessages(system, messages, assistant.contextMessageSize, conversationContextSummary))
         }.transforms(
             transformers = transformers,
             context = context,

@@ -129,6 +129,7 @@ private const val ScrollBottomKey = "ScrollBottomKey"
 
 @Composable
 fun ChatList(
+    showCompressedHistory: Boolean = false,
     innerPadding: PaddingValues,
     conversation: Conversation,
     state: LazyListState,
@@ -165,6 +166,7 @@ fun ChatList(
             ChatListPreview(
                 innerPadding = innerPadding,
                 conversation = conversation,
+                showCompressedHistory = showCompressedHistory,
                 settings = settings,
                 hazeState = hazeState,
                 onJumpToMessage = onJumpToMessage,
@@ -174,6 +176,7 @@ fun ChatList(
             ChatListNormal(
                 innerPadding = innerPadding,
                 conversation = conversation,
+                showCompressedHistory = showCompressedHistory,
                 state = state,
                 loading = loading,
                 processingStatus = processingStatus,
@@ -202,6 +205,7 @@ fun ChatList(
 
 @Composable
 private fun ChatListNormal(
+    showCompressedHistory: Boolean,
     innerPadding: PaddingValues,
     conversation: Conversation,
     state: LazyListState,
@@ -310,8 +314,8 @@ private fun ChatListNormal(
         }
 
         // Filter out [SKIP] messages and proactive message context markers
-        val displayNodes = remember(conversation.messageNodes) {
-            conversation.messageNodes.filter { node ->
+        val displayNodes = remember(conversation.messageNodes, conversation.compressionRevision, showCompressedHistory) {
+            (if (showCompressedHistory) conversation.messageNodes else conversation.visibleMessageNodes).filter { node ->
                 val msg = node.currentMessage
                 val text = msg.toText().trim()
                 !(msg.role == MessageRole.ASSISTANT && text == "[SKIP]") &&
@@ -348,6 +352,7 @@ private fun ChatListNormal(
                     ) {
                         ChatMessage(
                             node = node,
+                            readOnly = node.id in conversation.activeCompressedMessageNodeIds,
                             model = node.currentMessage.modelId?.let { settings.findModelById(it) },
                             assistant = settings.getAssistantById(conversation.assistantId),
                             loading = loading && index == displayNodes.lastIndex,
@@ -612,6 +617,7 @@ private fun buildHighlightedText(
 
 @Composable
 private fun ChatListPreview(
+    showCompressedHistory: Boolean,
     innerPadding: PaddingValues,
     conversation: Conversation,
     settings: Settings,
@@ -625,11 +631,13 @@ private fun ChatListPreview(
         (LocalDisplaySettings.current.interfaceSurfaceOpacity / 100f).coerceIn(0f, 1f)
 
     // 过滤消息，同时保留原始 index 避免后续 O(n) indexOf 查找
-    val filteredMessages = remember(conversation.messageNodes, searchQuery) {
+    val filteredMessages = remember(conversation.messageNodes, conversation.compressionRevision, showCompressedHistory, searchQuery) {
+        val visible = conversation.messageNodes.mapIndexed { index, node -> index to node }
+            .filter { (_, node) -> showCompressedHistory || node in conversation.visibleMessageNodes }
         if (searchQuery.isBlank()) {
-            conversation.messageNodes.mapIndexed { index, node -> index to node }
+            visible
         } else {
-            conversation.messageNodes.mapIndexed { index, node -> index to node }
+            visible
                 .filter { (_, node) -> node.currentMessage.toText().contains(searchQuery, ignoreCase = true) }
         }
     }

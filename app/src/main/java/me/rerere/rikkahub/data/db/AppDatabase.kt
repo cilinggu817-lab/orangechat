@@ -59,7 +59,7 @@ import me.rerere.rikkahub.utils.JsonInstant
         SshHostEntity::class,
         SecurityAuditEntity::class,
     ],
-    version = 30,
+    version = 33,
     autoMigrations = [
         AutoMigration(from = 1, to = 2),
         AutoMigration(from = 2, to = 3),
@@ -79,6 +79,8 @@ import me.rerere.rikkahub.utils.JsonInstant
         AutoMigration(from = 27, to = 28),
         AutoMigration(from = 28, to = 29),
         AutoMigration(from = 29, to = 30),
+        AutoMigration(from = 30, to = 31),
+        AutoMigration(from = 32, to = 33),
     ]
 )
 @TypeConverters(TokenUsageConverter::class)

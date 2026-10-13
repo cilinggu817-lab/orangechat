@@ -72,6 +72,7 @@ import java.util.Locale
 
 @Composable
 fun ColumnScope.ChatMessageActionButtons(
+    readOnly: Boolean = false,
     message: UIMessage,
     node: MessageNode,
     onUpdate: (MessageNode) -> Unit,
@@ -106,6 +107,7 @@ fun ColumnScope.ChatMessageActionButtons(
                 .size(16.dp)
         )
 
+        if (!readOnly) {
         Icon(
             imageVector = HugeIcons.Refresh03,
             contentDescription = stringResource(R.string.regenerate),
@@ -121,6 +123,8 @@ fun ColumnScope.ChatMessageActionButtons(
                 .padding(8.dp)
                 .size(16.dp)
         )
+
+        }
 
         if (message.role == MessageRole.ASSISTANT) {
             val tts = LocalTTSState.current
@@ -191,10 +195,12 @@ fun ColumnScope.ChatMessageActionButtons(
                 .size(16.dp)
         )
 
+        if (!readOnly) {
         ChatMessageBranchSelector(
             node = node,
             onUpdate = onUpdate,
         )
+        }
     }
 
     // Translation dialog
@@ -231,6 +237,7 @@ fun ColumnScope.ChatMessageActionButtons(
 
 @Composable
 fun ChatMessageActionsSheet(
+    readOnly: Boolean = false,
     message: UIMessage,
     model: Model?,
     onDelete: () -> Unit,
@@ -313,6 +320,7 @@ fun ChatMessageActionsSheet(
                 }
             }
 
+            if (!readOnly) {
             // Edit
             Card(
                 onClick = {
@@ -338,6 +346,8 @@ fun ChatMessageActionsSheet(
                         style = MaterialTheme.typography.titleMedium,
                     )
                 }
+            }
+
             }
 
             // Share
@@ -426,6 +436,7 @@ fun ChatMessageActionsSheet(
             }
 
             // Delete
+            if (!readOnly) {
             Card(
                 onClick = {
                     onDismissRequest()
@@ -453,6 +464,8 @@ fun ChatMessageActionsSheet(
                         style = MaterialTheme.typography.titleMedium,
                     )
                 }
+            }
+
             }
 
             // Message Info

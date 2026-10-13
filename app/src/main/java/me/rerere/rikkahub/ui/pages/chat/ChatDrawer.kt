@@ -132,6 +132,7 @@ fun ChatDrawerContent(
     vm: ChatVM,
     settings: Settings,
     current: Conversation,
+    onCloseDrawer: () -> Unit = {},
 ) {
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
@@ -355,6 +356,14 @@ fun ChatDrawerContent(
 
                 ConversationList(
                     current = current,
+                    showCompressedHistory = vm.showCompressedHistory,
+                    onToggleHistory = { conversationId ->
+                        if (conversationId == current.id) {
+                            vm.showCompressedHistory = !vm.showCompressedHistory
+                            onCloseDrawer()
+                        }
+                    },
+                    onOpenSummary = { conversationId -> vm.openSummary(conversationId) },
                     conversations = conversations,
                     conversationJobs = conversationJobs.keys,
                     listState = conversationListState,

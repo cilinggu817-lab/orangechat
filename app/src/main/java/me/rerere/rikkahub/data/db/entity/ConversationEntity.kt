@@ -32,4 +32,18 @@ data class ConversationEntity(
     val customSystemPrompt: String = "",
     @ColumnInfo("folder_id", defaultValue = "")
     val folderId: String = "",
+    @ColumnInfo("compression_summaries", defaultValue = "'[]'")
+    val compressionSummaries: String = "[]",
+    @ColumnInfo("compressed_node_ids", defaultValue = "'[]'")
+    val compressedNodeIds: String = "[]",
+    @ColumnInfo("compression_revision", defaultValue = "0")
+    val compressionRevision: Long = 0,
+    @ColumnInfo("send_compressed_summary", defaultValue = "1")
+    val sendCompressedSummary: Boolean = true,
+    // Keep the previous test build's column: rebuilding this parent table can cascade-delete message_node.
+    // Schema32 migrates its contents into compression_summaries, which is the canonical representation.
+    @ColumnInfo("compressed_summary", defaultValue = "''")
+    val legacyCompressedSummary: String = "",
+    @ColumnInfo("compression_history", defaultValue = "'[]'")
+    val compressionHistory: String = "[]",
 )

@@ -13,6 +13,11 @@ import me.rerere.hugeicons.stroke.Pin
 import me.rerere.hugeicons.stroke.PinOff
 import me.rerere.hugeicons.stroke.Refresh01
 import me.rerere.hugeicons.stroke.Delete01
+import me.rerere.hugeicons.stroke.View
+import me.rerere.hugeicons.stroke.ViewOff
+import me.rerere.hugeicons.stroke.File02
+import androidx.compose.material3.IconButton
+import me.rerere.rikkahub.ui.components.ui.Tooltip
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.background
@@ -87,6 +92,9 @@ sealed class ConversationListItem {
 @Composable
 fun ColumnScope.ConversationList(
     current: Conversation,
+    showCompressedHistory: Boolean = false,
+    onToggleHistory: (Uuid) -> Unit = {},
+    onOpenSummary: (Uuid) -> Unit = {},
     conversations: LazyPagingItems<ConversationListItem>,
     conversationJobs: Collection<Uuid>,
     listState: LazyListState,
@@ -170,7 +178,10 @@ fun ColumnScope.ConversationList(
 
                 is ConversationListItem.Item -> {
                     ConversationItem(
-                        conversation = item.conversation,
+                        conversation = if (item.conversation.id == current.id) current else item.conversation,
+                        showCompressedHistory = showCompressedHistory,
+                        onToggleHistory = onToggleHistory,
+                        onOpenSummary = onOpenSummary,
                         selected = item.conversation.id == current.id,
                         loading = item.conversation.id in conversationJobs,
                         onClick = onClick,
@@ -251,6 +262,9 @@ private fun PinnedHeader(
 @Composable
 private fun ConversationItem(
     conversation: Conversation,
+    showCompressedHistory: Boolean = false,
+    onToggleHistory: (Uuid) -> Unit = {},
+    onOpenSummary: (Uuid) -> Unit = {},
     selected: Boolean,
     loading: Boolean,
     modifier: Modifier = Modifier,
@@ -298,11 +312,28 @@ private fun ConversationItem(
         ) {
             Text(
                 text = conversation.title.ifBlank { stringResource(id = R.string.chat_page_new_message) },
+                modifier = Modifier.weight(1f),
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
                 color = MaterialTheme.colorScheme.onSurface,
             )
-            Spacer(Modifier.weight(1f))
+            if (selected && conversation.activeCompressedMessageNodeIds.isNotEmpty() && conversation.compressedSummary.isNotBlank()) {
+                val action = stringResource(if (showCompressedHistory) R.string.compression_hide_original else R.string.compression_show_original)
+                Tooltip(tooltip = { Text(action) }) {
+                    IconButton(onClick = { onToggleHistory(conversation.id) }, modifier = Modifier.size(48.dp)) {
+                        Icon(if (showCompressedHistory) HugeIcons.View else HugeIcons.ViewOff,
+                            action, modifier = Modifier.size(22.dp))
+                    }
+                }
+            }
+            if (selected && conversation.hasCompressionState) {
+                val action = stringResource(R.string.compression_summary_title)
+                Tooltip(tooltip = { Text(action) }) {
+                    IconButton(onClick = { onOpenSummary(conversation.id) }, modifier = Modifier.size(48.dp)) {
+                        Icon(HugeIcons.File02, action, modifier = Modifier.size(22.dp))
+                    }
+                }
+            }
 
             // 置顶图标
             AnimatedVisibility(conversation.isPinned) {

@@ -79,7 +79,7 @@ internal fun FilesPicker(
     assistant: Assistant,
     state: ChatInputState,
     mcpManager: McpManager,
-    onCompressContext: (additionalPrompt: String, targetTokens: Int, keepRecentMessages: Int) -> Job,
+    onCompressContext: (additionalPrompt: String, targetTokens: Int, keepRecentMessages: Int, mergeWithPrevious: Boolean) -> Job,
     onUpdateAssistant: (Assistant) -> Unit,
     showInjectionSheet: Boolean,
     onShowInjectionSheetChange: (Boolean) -> Unit,
@@ -188,9 +188,9 @@ internal fun FilesPicker(
                 Text(stringResource(R.string.chat_page_compress_context))
             },
             trailingContent = {
-                if (conversation.messageNodes.isNotEmpty()) {
+                if (conversation.visibleMessageNodes.isNotEmpty()) {
                     Text(
-                        text = stringResource(R.string.chat_page_message_count, conversation.messageNodes.size),
+                        text = stringResource(R.string.chat_page_message_count, conversation.visibleMessageNodes.size),
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -218,8 +218,8 @@ internal fun FilesPicker(
         CompressContextDialog(onDismiss = {
             onShowCompressDialogChange(false)
             onDismiss()
-        }, onConfirm = { additionalPrompt, targetTokens, keepRecentMessages ->
-            onCompressContext(additionalPrompt, targetTokens, keepRecentMessages)
+        }, onConfirm = { additionalPrompt, targetTokens, keepRecentMessages, mergeWithPrevious ->
+            onCompressContext(additionalPrompt, targetTokens, keepRecentMessages, mergeWithPrevious)
         })
     }
 }

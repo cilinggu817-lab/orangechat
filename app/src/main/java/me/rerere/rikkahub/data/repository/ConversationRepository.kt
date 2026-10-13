@@ -407,6 +407,12 @@ class ConversationRepository(
             isPinned = conversation.isPinned,
             customSystemPrompt = conversation.customSystemPrompt ?: "",
             folderId = conversation.folderId?.toString() ?: "",
+            compressionSummaries = JsonInstant.encodeToString(conversation.compressionSummaries),
+            compressedNodeIds = JsonInstant.encodeToString(conversation.compressedMessageNodeIds),
+            compressionRevision = conversation.compressionRevision,
+            sendCompressedSummary = conversation.sendCompressedSummary,
+            legacyCompressedSummary = conversation.compressedSummary,
+            compressionHistory = JsonInstant.encodeToString(conversation.compressionHistory),
         )
     }
 
@@ -425,6 +431,11 @@ class ConversationRepository(
             isPinned = conversationEntity.isPinned,
             customSystemPrompt = conversationEntity.customSystemPrompt.ifEmpty { null },
             folderId = conversationEntity.folderId.ifEmpty { null }?.let { Uuid.parse(it) },
+            compressionSummaries = JsonInstant.decodeFromString(conversationEntity.compressionSummaries),
+            compressedMessageNodeIds = JsonInstant.decodeFromString(conversationEntity.compressedNodeIds),
+            compressionRevision = conversationEntity.compressionRevision,
+            sendCompressedSummary = conversationEntity.sendCompressedSummary,
+            compressionHistory = JsonInstant.decodeFromString(conversationEntity.compressionHistory),
         )
     }
 

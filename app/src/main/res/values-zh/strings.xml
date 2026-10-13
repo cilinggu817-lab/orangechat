@@ -263,13 +263,16 @@
   <string name="chat_page_clear_all_errors">清除全部</string>
   <string name="chat_page_compress_additional_prompt">附加说明（可选）</string>
   <string name="chat_page_compress_additional_prompt_hint">指定要保留或关注的内容</string>
+  <string name="chat_page_compress_merge_previous">与往期摘要合并</string>
+  <string name="chat_page_compress_merge_previous_on">将本次摘要与已选中的往期摘要重新汇总。</string>
+  <string name="chat_page_compress_merge_previous_off">本次摘要单独保存，往期摘要保持不变。</string>
   <string name="chat_page_compress_context">压缩历史</string>
   <string name="chat_page_compress_context_desc">将对话压缩为摘要以节省令牌</string>
   <string name="chat_page_compress_context_title">压缩对话历史</string>
   <string name="chat_page_compress_keep_recent">保留最近的消息</string>
   <string name="chat_page_compress_not_enough_messages">消息数量不足，无法压缩。请减少保留的消息数量或添加更多消息。</string>
   <string name="chat_page_compress_target_tokens">目标Token大小</string>
-  <string name="chat_page_compress_warning">⚠️ 压缩上下文将重置当前对话中的所有消息</string>
+  <string name="chat_page_compress_warning">原始消息会保留，可在侧栏查看或撤销压缩。</string>
   <string name="chat_page_compressing">正在压缩...</string>
   <string name="chat_page_conversation_system_prompt">对话系统提示</string>
   <string name="chat_page_conversation_system_prompt_clear">清除</string>
@@ -1233,4 +1236,25 @@ mDNS 地址：使用 .local 主机名，同一网络中的其他设备可通过�
 
   <string name="plugin_security_banner">⚠ 插件可执行网络请求并访问您已授权的系统数据。请仅从可信来源安装插件。</string>
   <string name="web_server_security_warning_no_jwt">⚠ 未启用 JWT 鉴权或密码为空。当前任何可访问该地址的人都能读取您的对话记录，强烈建议立即设置密码并开启 JWT。</string>
+  <string name="compression_show_original">显示压缩前原文</string>
+  <string name="compression_hide_original">收起压缩前原文</string>
+  <string name="compression_summary_title">压缩摘要</string>
+  <string name="compression_merge_existing">合并已有摘要</string>
+  <string name="compression_merge_existing_hint">只汇总已勾选的摘要，未勾选的保持原样。结果先回填供你检查，点击保存后生效。目标 token 是近似长度；想控制全部摘要的总量，可先全选。</string>
+  <string name="compression_merging">正在合并摘要…</string>
+  <string name="compression_send_summary">向 AI 发送摘要</string>
+  <string name="compression_send_hint">保存后用于下一次请求。关闭或取消勾选只停止发送对应摘要，压缩前原文仍不会发送；查看原文不改变发送范围。</string>
+  <string name="compression_selected_count">将发送 %1$d / %2$d 段摘要</string>
+  <string name="compression_select_all">全选</string>
+  <string name="compression_select_none">全不选</string>
+  <string name="compression_split_lines">按换行拆分</string>
+  <string name="compression_send_part">发送第 %1$d 段</string>
+  <string name="compression_part">摘要第 %1$d 段</string>
+  <string name="compression_undo">撤销压缩</string>
+  <string name="compression_undo_latest">撤销最近一次压缩</string>
+  <string name="compression_undo_all">撤销全部压缩</string>
+  <string name="compression_undo_latest_hint">仅恢复最近一次压缩前的摘要和发送设置，让这一轮的 %1$d 条原文重新参与上下文选择。更早的压缩保持不变，可能增加 token 用量。</string>
+  <string name="compression_undo_all_hint">将清除全部摘要与压缩记录，让 %1$d 条原文重新参与上下文选择，可能大幅增加 token 用量。确认撤销全部吗？</string>
+  <string name="compression_undo_no_history">这份压缩记录没有逐次快照，无法只撤销最近一次。此版本之后的新压缩会保存恢复点。</string>
+  <string name="compression_undo_hint">清除摘要和覆盖标记，让原文重新参与上下文选择，可能增加 token 用量。原文不会删除。</string>
 </resources>

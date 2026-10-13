@@ -42,9 +42,9 @@ private val DefaultSizeInfo = ConversationSizeInfo(
 
 @Composable
 fun rememberConversationSizeInfo(conversation: Conversation): ConversationSizeInfo {
-    return remember(conversation.messageNodes) {
-        val nodeCount = conversation.messageNodes.size
-        val lastAssistantInputTokens = conversation.messageNodes.asReversed()
+    return remember(conversation.messageNodes, conversation.compressionRevision) {
+        val nodeCount = conversation.visibleMessageNodes.size
+        val lastAssistantInputTokens = conversation.visibleMessageNodes.asReversed()
             .map { it.currentMessage }
             .firstOrNull { it.role == MessageRole.ASSISTANT }
             ?.usage

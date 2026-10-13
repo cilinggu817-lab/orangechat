@@ -552,12 +552,12 @@ class ProactiveMessageTriggerService : android.app.Service(), KoinComponent {
                     "idleIncluded=true currentTimeIncluded=${settings.systemToolsSetting.shouldInjectTimeContext(proactive = true)}",
                 )
 
-                val rawHistoryMessages = conversation?.currentMessages?.let {
+                val rawHistoryMessages = activeConversation.messagesForGeneration().let {
                     val configuredSize = assistant.contextMessageSize
                         .takeIf { size -> size > 0 }
                         ?: MAX_PROACTIVE_CONTEXT_MESSAGES
                     it.takeLast(configuredSize.coerceAtMost(MAX_PROACTIVE_CONTEXT_MESSAGES))
-                } ?: emptyList()
+                }
                 val latestUserText = latestUserMessage.visibleTextForProactiveContext()
                 val latestRegularAssistantText = rawHistoryMessages.lastOrNull { message ->
                     message.role == MessageRole.ASSISTANT &&
@@ -668,13 +668,9 @@ class ProactiveMessageTriggerService : android.app.Service(), KoinComponent {
                 // Keep the wake-up user turn request-only. Claude/Gemini cannot start from
                 // an assistant prefill; tool continuations below retain their result pairing.
                 val messages = beginProactiveRequest(
-                    buildList {
-                        add(UIMessage(
-                            role = MessageRole.SYSTEM,
-                            parts = listOf(UIMessagePart.Text(systemPrompt))
-                        ))
-                        addAll(historyMessages)
-                    },
+                    me.rerere.rikkahub.data.ai.buildConversationRequestMessages(
+                        systemPrompt, historyMessages, 0, activeConversation.summaryForGeneration(),
+                    ),
                     context = extraContext.orEmpty(),
                 )
                 trace.messages("request", messages)
@@ -804,7 +800,7 @@ class ProactiveMessageTriggerService : android.app.Service(), KoinComponent {
                                     node.messages.any { it.id == message.id }
                                 })
                                 chatService.updateConversation(conversationId, cleaned)
-                                chatService.saveConversation(conversationId, cleaned)
+                                chatService.saveConversationLocked(conversationId, cleaned)
                             }
                         }
                         finalMessages = finalized.dropLast(1) + completed
@@ -1268,7 +1264,7 @@ class ProactiveMessageTriggerService : android.app.Service(), KoinComponent {
         val session = chatService.getOrCreateSession(conversationId)
         session.saveMutex.withLock {
             trace.conversation("save_before", chatService.getConversationFlow(conversationId).value)
-            chatService.saveConversation(
+            chatService.saveConversationLocked(
                 conversationId,
                 chatService.getConversationFlow(conversationId).value
             )
@@ -1407,7 +1403,7 @@ class ProactiveMessageTriggerService : android.app.Service(), KoinComponent {
                 conv.copy(messageNodes = conv.messageNodes + aiMessage.toMessageNode())
             }
             chatService.updateConversation(conversationId, updated)
-            chatService.saveConversation(conversationId, updated)
+            chatService.saveConversationLocked(conversationId, updated)
         }
     }
 
@@ -1440,7 +1436,7 @@ class ProactiveMessageTriggerService : android.app.Service(), KoinComponent {
             )
             if (updated.messageNodes.size != conversation.messageNodes.size) {
                 chatService.updateConversation(conversationId, updated)
-                chatService.saveConversation(conversationId, updated)
+                chatService.saveConversationLocked(conversationId, updated)
             }
             trace.event(
                 "run_cleanup",

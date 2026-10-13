@@ -266,13 +266,16 @@
   <string name="chat_page_clear_all_errors">Clear all</string>
   <string name="chat_page_compress_additional_prompt">Additional Instructions (Optional)</string>
   <string name="chat_page_compress_additional_prompt_hint">Specify what to preserve or focus on</string>
+  <string name="chat_page_compress_merge_previous">Merge with previous summaries</string>
+  <string name="chat_page_compress_merge_previous_on">Combine this summary with selected previous summaries.</string>
+  <string name="chat_page_compress_merge_previous_off">Save this summary separately and keep previous summaries unchanged.</string>
   <string name="chat_page_compress_context">Compress History</string>
   <string name="chat_page_compress_context_desc">Compress the conversation into a summary to save tokens</string>
   <string name="chat_page_compress_context_title">Compress Conversation History</string>
   <string name="chat_page_compress_keep_recent">Keep recent messages</string>
   <string name="chat_page_compress_not_enough_messages">Not enough messages to compress. Reduce the number of messages to keep or add more messages.</string>
   <string name="chat_page_compress_target_tokens">Target Token Size</string>
-  <string name="chat_page_compress_warning">⚠️ Compressing context will reset all messages in the current conversation</string>
+  <string name="chat_page_compress_warning">Original messages are retained. View them or undo compression from the sidebar.</string>
   <string name="chat_page_compressing">Compressing...</string>
   <string name="chat_page_conversation_system_prompt">Conversation System Prompt</string>
   <string name="chat_page_conversation_system_prompt_clear">Clear</string>
@@ -1239,4 +1242,25 @@
 
   <string name="plugin_security_banner">⚠ Plugins can make network requests and access system data you have authorized. Only install plugins from trusted sources.</string>
   <string name="web_server_security_warning_no_jwt">⚠ JWT authentication is not enabled or the password is empty. Anyone who can access this address can read your conversation records. It is strongly recommended to set a password and enable JWT immediately.</string>
+  <string name="compression_show_original">显示压缩前原文</string>
+  <string name="compression_hide_original">收起压缩前原文</string>
+  <string name="compression_summary_title">压缩摘要</string>
+  <string name="compression_merge_existing">Merge existing summaries</string>
+  <string name="compression_merge_existing_hint">Summarize selected entries only. Excluded entries stay unchanged. Review the result, then Save to apply it. The token target is approximate; select all to control the overall length.</string>
+  <string name="compression_merging">Merging summaries…</string>
+  <string name="compression_send_summary">向 AI 发送摘要</string>
+  <string name="compression_send_hint">保存后用于下一次请求。关闭或取消勾选只停止发送对应摘要，压缩前原文仍不会发送；查看原文不改变发送范围。</string>
+  <string name="compression_selected_count">将发送 %1$d / %2$d 段摘要</string>
+  <string name="compression_select_all">全选</string>
+  <string name="compression_select_none">全不选</string>
+  <string name="compression_split_lines">按换行拆分</string>
+  <string name="compression_send_part">发送第 %1$d 段</string>
+  <string name="compression_part">摘要第 %1$d 段</string>
+  <string name="compression_undo">撤销压缩</string>
+  <string name="compression_undo_latest">撤销最近一次压缩</string>
+  <string name="compression_undo_all">撤销全部压缩</string>
+  <string name="compression_undo_latest_hint">仅恢复最近一次压缩前的摘要和发送设置，让这一轮的 %1$d 条原文重新参与上下文选择。更早的压缩保持不变，可能增加 token 用量。</string>
+  <string name="compression_undo_all_hint">将清除全部摘要与压缩记录，让 %1$d 条原文重新参与上下文选择，可能大幅增加 token 用量。确认撤销全部吗？</string>
+  <string name="compression_undo_no_history">这份压缩记录没有逐次快照，无法只撤销最近一次。此版本之后的新压缩会保存恢复点。</string>
+  <string name="compression_undo_hint">清除摘要和覆盖标记，让原文重新参与上下文选择，可能增加 token 用量。原文不会删除。</string>
 </resources>

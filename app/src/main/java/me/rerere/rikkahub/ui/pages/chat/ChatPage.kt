@@ -207,6 +207,16 @@ fun ChatPage(id: Uuid, text: String?, files: List<Uri>, nodeId: Uuid? = null, au
 
     val setting by vm.settings.collectAsStateWithLifecycle()
     val conversation by vm.conversation.collectAsStateWithLifecycle()
+    vm.summaryDialogConversation?.let { snapshot ->
+        ConversationSummaryDialog(
+            conversation = snapshot,
+            onDismiss = { vm.summaryDialogConversation = null },
+            onSave = { summaries, enabled, undo -> vm.saveSummary(snapshot, summaries, enabled, undo) },
+            onMerge = { summaries, enabled, prompt, tokens ->
+                vm.mergeSummaries(snapshot, summaries, enabled, prompt, tokens)
+            },
+        )
+    }
     val loadingJob by vm.conversationJob.collectAsStateWithLifecycle()
     val processingStatus by vm.processingStatus.collectAsStateWithLifecycle()
     val currentChatModel by vm.currentChatModel.collectAsStateWithLifecycle()
@@ -270,8 +280,13 @@ fun ChatPage(id: Uuid, text: String?, files: List<Uri>, nodeId: Uuid? = null, au
     LaunchedEffect(nodeId, conversation.messageNodes.size) {
         if (!vm.chatListInitialized && conversation.messageNodes.isNotEmpty()) {
             if (nodeId != null) {
-                val index = conversation.messageNodes.indexOfFirst { it.id == nodeId }
+                val index = conversation.messageNodes.filter { node ->
+                    val msg = node.currentMessage
+                    !(msg.role == me.rerere.ai.core.MessageRole.ASSISTANT && msg.toText().trim() == "[SKIP]") &&
+                        !(msg.role == me.rerere.ai.core.MessageRole.USER && msg.toText().contains("[主动消息上下文]"))
+                }.indexOfFirst { it.id == nodeId }
                 if (index >= 0) {
+                    vm.showCompressedHistory = true
                     chatListState.scrollToItem(index)
                 }
             } else {
@@ -288,6 +303,7 @@ fun ChatPage(id: Uuid, text: String?, files: List<Uri>, nodeId: Uuid? = null, au
                     ChatDrawerContent(
                         navController = navController,
                         current = conversation,
+                        onCloseDrawer = { scope.launch { drawerState.close() } },
                         vm = vm,
                         settings = setting,
                     )
@@ -323,6 +339,7 @@ fun ChatPage(id: Uuid, text: String?, files: List<Uri>, nodeId: Uuid? = null, au
                     ChatDrawerContent(
                         navController = navController,
                         current = conversation,
+                        onCloseDrawer = { scope.launch { drawerState.close() } },
                         vm = vm,
                         settings = setting,
                     )
@@ -668,14 +685,15 @@ private fun ChatPageContent(
                             )
                         )
                     },
-                    onCompressContext = { additionalPrompt, targetTokens, keepRecentMessages ->
-                        vm.handleCompressContext(additionalPrompt, targetTokens, keepRecentMessages)
+                    onCompressContext = { additionalPrompt, targetTokens, keepRecentMessages, mergeWithPrevious ->
+                        vm.handleCompressContext(additionalPrompt, targetTokens, keepRecentMessages, mergeWithPrevious)
                     },
                 )
             },
             containerColor = Color.Transparent,
         ) { innerPadding ->
             ChatList(
+                showCompressedHistory = vm.showCompressedHistory,
                 innerPadding = innerPadding,
                 conversation = conversation,
                 state = chatListState,
@@ -733,7 +751,14 @@ private fun ChatPageContent(
                 onJumpToMessage = { index ->
                     previewMode = false
                     scope.launch {
-                        chatListState.animateScrollToItem(index)
+                        val target = conversation.messageNodes.getOrNull(index)
+                        val displayed = if (vm.showCompressedHistory) conversation.messageNodes else conversation.visibleMessageNodes
+                        val visibleIndex = displayed.filter { node ->
+                            val msg = node.currentMessage
+                            !(msg.role == me.rerere.ai.core.MessageRole.ASSISTANT && msg.toText().trim() == "[SKIP]") &&
+                                !(msg.role == me.rerere.ai.core.MessageRole.USER && msg.toText().contains("[主动消息上下文]"))
+                        }.indexOfFirst { it.id == target?.id }
+                        if (visibleIndex >= 0) chatListState.animateScrollToItem(visibleIndex)
                     }
                 },
                 onToolApproval = { toolCallId, approved, reason ->

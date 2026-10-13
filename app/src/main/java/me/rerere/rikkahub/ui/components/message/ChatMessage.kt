@@ -243,6 +243,7 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawLiveBackgroundF
 @Composable
 fun ChatMessage(
     node: MessageNode,
+    readOnly: Boolean = false,
     modifier: Modifier = Modifier,
     loading: Boolean = false,
     model: Model? = null,
@@ -337,7 +338,7 @@ fun ChatMessage(
                 model = model,
                 onToolApproval = onToolApproval,
                 onToolAnswer = onToolAnswer,
-                onUserMessageClick = if (message.role == MessageRole.USER) onEdit else null,
+                onUserMessageClick = if (!readOnly && message.role == MessageRole.USER) onEdit else null,
             )
  
             message.translation?.let { translation ->
@@ -363,6 +364,7 @@ fun ChatMessage(
                 modifier = Modifier.animateContentSize()
             ) {
                 ChatMessageActionButtons(
+                    readOnly = readOnly,
                     message = message,
                     onRegenerate = onRegenerate,
                     node = node,
@@ -382,6 +384,7 @@ fun ChatMessage(
     }
     if (showActionsSheet) {
         ChatMessageActionsSheet(
+            readOnly = readOnly,
             message = message,
             onEdit = onEdit,
             onDelete = onDelete,
@@ -1460,4 +1463,3 @@ internal fun VoiceMessageBubble(
         }
     }
 }
- 

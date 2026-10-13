@@ -27,6 +27,8 @@ import kotlinx.coroutines.launch
 import me.rerere.ai.provider.Model
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
+import me.rerere.rikkahub.data.model.ConversationSummary
+import me.rerere.rikkahub.data.model.CompressionUndoMode
 import me.rerere.ai.ui.isEmptyInputMessage
 import me.rerere.rikkahub.R
 import me.rerere.rikkahub.data.datastore.Settings
@@ -64,6 +66,29 @@ class ChatVM(
     private val _conversationId: Uuid = Uuid.parse(id)
     val conversation: StateFlow<Conversation> = chatService.getConversationFlow(_conversationId)
     var chatListInitialized by mutableStateOf(false) // 聊天列表是否已经滚动到底部
+    var showCompressedHistory by mutableStateOf(false)
+    var summaryDialogConversation by mutableStateOf<Conversation?>(null)
+
+    fun openSummary(conversationId: Uuid) {
+        if (conversation.value.id == conversationId) summaryDialogConversation = conversation.value
+    }
+
+    suspend fun saveSummary(
+        snapshot: Conversation,
+        summaries: List<ConversationSummary>,
+        enabled: Boolean,
+        undo: CompressionUndoMode? = null,
+    ) = chatService.saveCompressionSettings(snapshot.id, snapshot.compressionRevision, summaries, enabled, undo)
+
+    suspend fun mergeSummaries(
+        snapshot: Conversation,
+        summaries: List<ConversationSummary>,
+        enabled: Boolean,
+        additionalPrompt: String,
+        targetTokens: Int,
+    ) = chatService.mergeExistingSummaries(
+        snapshot.id, snapshot.compressionRevision, summaries, enabled, additionalPrompt, targetTokens,
+    )
 
     // 聊天输入状态 - 保存在 ViewModel 中避免 TransactionTooLargeException
     val inputState = ChatInputState()
@@ -190,14 +215,20 @@ class ChatVM(
         }
     }
 
-    fun handleCompressContext(additionalPrompt: String, targetTokens: Int, keepRecentMessages: Int): Job {
+    fun handleCompressContext(
+        additionalPrompt: String,
+        targetTokens: Int,
+        keepRecentMessages: Int,
+        mergeWithPrevious: Boolean = true,
+    ): Job {
         return viewModelScope.launch {
             chatService.compressConversation(
                 _conversationId,
                 conversation.value,
                 additionalPrompt,
                 targetTokens,
-                keepRecentMessages
+                keepRecentMessages,
+                mergeWithPrevious,
             ).onFailure {
                 chatService.addError(it, title = context.getString(R.string.error_title_compress_conversation))
             }
@@ -299,7 +330,7 @@ class ChatVM(
     fun generateTitle(conversation: Conversation, force: Boolean = false) {
         viewModelScope.launch {
             val conversationFull = conversationRepo.getConversationById(conversation.id) ?: return@launch
-            chatService.generateTitle(_conversationId, conversationFull, force)
+            chatService.generateTitle(conversation.id, conversationFull, force)
         }
     }
 

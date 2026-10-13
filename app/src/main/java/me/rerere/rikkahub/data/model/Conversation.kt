@@ -35,6 +35,11 @@ data class Conversation(
     val workspaceCwd: String? = null,
     // 所属文件夹（助手内分组），null 表示未归入任何文件夹
     val folderId: Uuid? = null,
+    val compressionSummaries: List<ConversationSummary> = emptyList(),
+    val compressedMessageNodeIds: Set<Uuid> = emptySet(),
+    val compressionRevision: Long = 0,
+    val sendCompressedSummary: Boolean = true,
+    val compressionHistory: List<ConversationCompressionSnapshot> = emptyList(),
     @Transient
     val newConversation: Boolean = false
 ) {
@@ -60,38 +65,160 @@ data class Conversation(
         return messageNodes.firstOrNull { node -> node.messages.any { it.id == messageId } }
     }
 
-    fun updateCurrentMessages(messages: List<UIMessage>): Conversation {
-        val newNodes = this.messageNodes.toMutableList()
+    val compressedSummary: String get() = compressionSummaries.joinToString("\n\n") { it.text }
 
-        messages.forEachIndexed { index, message ->
-            val node = newNodes
-                .getOrElse(index) { message.toMessageNode() }
+    val hasCompressionState: Boolean
+        get() = compressionSummaries.isNotEmpty() || compressedMessageNodeIds.isNotEmpty()
 
-            val newMessages = node.messages.toMutableList()
-            var newMessageIndex = node.selectIndex
-            if (newMessages.any { it.id == message.id }) {
-                newMessages[newMessages.indexOfFirst { it.id == message.id }] = message
-            } else {
-                newMessages.add(message)
-                newMessageIndex = newMessages.lastIndex
-            }
+    // Coverage is a prefix of real nodes. Never silently hide history with no summary.
+    val activeCompressedMessageNodeIds: Set<Uuid>
+        get() = messageNodes.takeWhile { it.id in compressedMessageNodeIds }.map { it.id }.toSet()
 
-            val newNode = node.copy(
-                messages = newMessages,
-                selectIndex = newMessageIndex
-            )
+    val visibleMessageNodes: List<MessageNode>
+        get() = if (compressedSummary.isBlank() || activeCompressedMessageNodeIds.size == messageNodes.size) messageNodes else
+            messageNodes.filterNot { it.id in activeCompressedMessageNodeIds }
 
-            // 更新newNodes
-            if (index > newNodes.lastIndex) {
-                newNodes.add(newNode)
-            } else {
-                newNodes[index] = newNode
-            }
+    fun messagesForGeneration(messageRange: ClosedRange<Int>? = null): List<UIMessage> {
+        check(compressedMessageNodeIds.isEmpty() || compressedSummary.isNotBlank()) {
+            "压缩记录缺少摘要，请先撤销压缩再继续。"
+        }
+        check(activeCompressedMessageNodeIds.isEmpty() || activeCompressedMessageNodeIds.size < messageNodes.size) {
+            "压缩记录没有保留近期原文，请先撤销压缩再继续。"
+        }
+        val nodes = if (messageRange == null) messageNodes else {
+            check(messageRange.start == 0 && activeCompressedMessageNodeIds.all { id ->
+                messageNodes.indexOfFirst { it.id == id } <= messageRange.endInclusive
+            }) { "此处早于摘要覆盖范围，请从此消息分叉后继续。" }
+            messageNodes.slice(messageRange.start..messageRange.endInclusive)
+        }
+        return nodes.filterNot { it.id in activeCompressedMessageNodeIds }.map { it.currentMessage }
+    }
+
+    fun summaryForGeneration(): String? = if (sendCompressedSummary) {
+        compressionSummaries.filter { it.sendToModel }.joinToString("\n\n") { it.text }.ifBlank { null }
+    } else null
+
+    fun compressionCandidates(keepRecentMessages: Int): List<MessageNode> {
+        messagesForGeneration() // Validate damaged state before starting any provider call.
+        val nodes = visibleMessageNodes
+        var boundary = (nodes.size - keepRecentMessages.coerceAtLeast(1)).coerceAtLeast(0)
+        // Keep the entire last user turn, including its tool calls/results.
+        while (boundary > 0 && nodes.getOrNull(boundary)?.role != MessageRole.USER) boundary--
+        return nodes.take(boundary)
+    }
+
+    fun withCompressionResult(
+        base: Conversation,
+        sources: List<MessageNode>,
+        summaries: List<ConversationSummary>,
+    ): Conversation {
+        check(compressionRevision == base.compressionRevision &&
+            compressionSummaries == base.compressionSummaries &&
+            compressedMessageNodeIds == base.compressedMessageNodeIds &&
+            sendCompressedSummary == base.sendCompressedSummary &&
+            compressionHistory == base.compressionHistory) { "摘要已变更，请重新压缩。" }
+        val prefix = base.messageNodes.takeWhile { node ->
+            node.id in base.activeCompressedMessageNodeIds || sources.any { it.id == node.id }
+        }
+        check(messageNodes.take(prefix.size).map { it.copy(isFavorite = false) } ==
+            prefix.map { it.copy(isFavorite = false) }) { "待压缩原文已变更，请重新压缩。" }
+        require(summaries.isNotEmpty() && summaries.all { it.text.isNotBlank() })
+        return copy(
+            compressionSummaries = summaries,
+            compressedMessageNodeIds = activeCompressedMessageNodeIds + sources.map { it.id },
+            compressionRevision = compressionRevision + 1,
+            compressionHistory = compressionHistory + ConversationCompressionSnapshot(
+                summaries = compressionSummaries,
+                compressedNodeCount = activeCompressedMessageNodeIds.size,
+                lastCompressedNodeId = messageNodes.getOrNull(activeCompressedMessageNodeIds.size - 1)?.id,
+                sendCompressedSummary = sendCompressedSummary,
+            ),
+            chatSuggestions = emptyList(),
+        )
+    }
+
+    fun withSummaryEdits(revision: Long, summaries: List<ConversationSummary>, enabled: Boolean): Conversation {
+        check(revision == compressionRevision) { "摘要已在后台更新，请关闭后重新打开。" }
+        require(summaries.isNotEmpty() && summaries.all { it.text.isNotBlank() }) { "摘要不能为空，请使用撤销压缩。" }
+        return copy(compressionSummaries = summaries, sendCompressedSummary = enabled,
+            compressionRevision = compressionRevision + 1)
+    }
+
+    fun withoutCompression(revision: Long): Conversation {
+        check(revision == compressionRevision) { "摘要已在后台更新，请关闭后重新打开。" }
+        return copy(compressionSummaries = emptyList(), compressedMessageNodeIds = emptySet(),
+            compressionRevision = compressionRevision + 1, sendCompressedSummary = true, compressionHistory = emptyList())
+    }
+
+    /** A missing/invalid checkpoint must never fall back to clearing all previous compression. */
+    val latestCompressionSnapshot: ConversationCompressionSnapshot?
+        get() = compressionHistory.lastOrNull()?.takeIf { snapshot ->
+            snapshot.compressedNodeCount in 0..activeCompressedMessageNodeIds.size &&
+                messageNodes.getOrNull(snapshot.compressedNodeCount - 1)?.id == snapshot.lastCompressedNodeId &&
+                (snapshot.compressedNodeCount == 0 || snapshot.summaries.any { it.text.isNotBlank() })
         }
 
-        return this.copy(
-            messageNodes = newNodes
+    val latestCompressionUndoRestoredCount: Int
+        get() = latestCompressionSnapshot?.let {
+            activeCompressedMessageNodeIds.size - it.compressedNodeCount
+        } ?: 0
+
+    fun undoLatestCompression(revision: Long): Conversation {
+        check(revision == compressionRevision) { "摘要已在后台更新，请关闭后重新打开。" }
+        val previous = checkNotNull(latestCompressionSnapshot) { "没有可恢复的压缩快照，无法只撤销最近一次。" }
+        return copy(
+            compressionSummaries = previous.summaries,
+            compressedMessageNodeIds = messageNodes.take(previous.compressedNodeCount).map { it.id }.toSet(),
+            sendCompressedSummary = previous.sendCompressedSummary,
+            compressionHistory = compressionHistory.dropLast(1),
+            compressionRevision = compressionRevision + 1,
+            chatSuggestions = emptyList(),
         )
+    }
+
+    fun requireEditableMessage(messageId: Uuid) {
+        check(getMessageNodeByMessageId(messageId)?.id !in activeCompressedMessageNodeIds) {
+            "压缩前原文只供查看，请从此处分叉，或先撤销压缩。"
+        }
+    }
+
+    fun compressionStateForFork(originals: List<MessageNode>, copies: List<MessageNode>): Conversation {
+        val inherited = activeCompressedMessageNodeIds.isNotEmpty() &&
+            originals.lastOrNull()?.id !in activeCompressedMessageNodeIds &&
+            originals.map { it.id }.containsAll(activeCompressedMessageNodeIds)
+        val idMap = originals.zip(copies).associate { (old, new) -> old.id to new.id }
+        return copy(
+            messageNodes = copies,
+            compressionSummaries = if (inherited) compressionSummaries else emptyList(),
+            compressedMessageNodeIds = if (inherited) activeCompressedMessageNodeIds.mapNotNull { idMap[it] }.toSet() else emptySet(),
+            compressionRevision = 0,
+            compressionHistory = if (inherited) compressionHistory.map { snapshot ->
+                snapshot.copy(lastCompressedNodeId = snapshot.lastCompressedNodeId?.let { idMap[it] })
+            } else emptyList(),
+        )
+    }
+
+    // Identity-based updates work with either full history or a filtered request window.
+    fun updateCurrentMessages(messages: List<UIMessage>, targets: Map<Uuid, Uuid> = emptyMap()): Conversation {
+        val nodes = messageNodes.toMutableList()
+        val archived = activeCompressedMessageNodeIds
+        messages.forEach { message ->
+            val index = nodes.indexOfFirst { node -> node.messages.any { it.id == message.id } }
+                .takeIf { it >= 0 } ?: nodes.indexOfFirst { it.id == targets[message.id] }
+            // A generation started before compression may still return its full
+            // old window. Its chunks must leave newly archived nodes intact.
+            if (index >= 0 && nodes[index].id in archived) return@forEach
+            if (index < 0) {
+                nodes.add(message.toMessageNode())
+            } else {
+                val node = nodes[index]
+                val existing = node.messages.indexOfFirst { it.id == message.id }
+                nodes[index] = if (existing >= 0) node.copy(
+                    messages = node.messages.toMutableList().also { it[existing] = message }
+                ) else node.copy(messages = node.messages + message, selectIndex = node.messages.size)
+            }
+        }
+        return copy(messageNodes = nodes)
     }
 
     companion object {
@@ -108,6 +235,31 @@ data class Conversation(
         )
     }
 }
+
+@Serializable
+data class ConversationCompressionSnapshot(
+    val summaries: List<ConversationSummary>,
+    // Coverage is a contiguous prefix. Store its boundary rather than copying thousands of UUIDs per round.
+    val compressedNodeCount: Int,
+    val lastCompressedNodeId: Uuid?,
+    val sendCompressedSummary: Boolean,
+)
+
+enum class CompressionUndoMode { LATEST, ALL }
+
+@Serializable
+data class ConversationSummary(
+    val id: Uuid = Uuid.random(),
+    val text: String,
+    val sendToModel: Boolean = true,
+) {
+    fun splitLines(): List<ConversationSummary> = text.lines().filter { it.isNotBlank() }.mapIndexed { index, line ->
+        copy(id = if (index == 0) id else Uuid.random(), text = line.trim())
+    }.ifEmpty { listOf(this) }
+}
+
+fun summaryParagraphs(text: String): List<ConversationSummary> =
+    text.trim().split(Regex("\n\\s*\n")).filter { it.isNotBlank() }.map { ConversationSummary(text = it.trim()) }
 
 @Serializable
 data class MessageNode(
