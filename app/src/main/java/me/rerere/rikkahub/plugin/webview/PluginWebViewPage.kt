@@ -68,6 +68,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import me.rerere.rikkahub.data.files.SafeFileResolver
@@ -403,42 +404,25 @@ fun PluginWebViewPage(
 
     // Launcher for saveFileAs (SAF CreateDocument - user picks save location)
     val saveFileAsLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.CreateDocument("application/json")
+        contract = ActivityResultContracts.CreateDocument("*/*")
     ) { uri: Uri? ->
         val callbackId = pendingSaveCallbackId
         val base64Data = pendingSaveBase64Data
         if (callbackId != null) {
-            if (uri != null && base64Data != null) {
-                try {
-                    val bytes = Base64.decode(base64Data, Base64.DEFAULT)
-                    context.contentResolver.openOutputStream(uri)?.use { outputStream ->
-                        outputStream.write(bytes)
-                        outputStream.flush()
-                    }
-                    val fileName = uri.lastPathSegment ?: "saved_file"
-                    val escapedName = fileName.replace("\\", "\\\\").replace("'", "\\'")
-                    webView?.post {
-                        webView?.evaluateJavascript(
-                            "window.__bridgeResult('$callbackId', {success:true,fileName:'$escapedName'});", null
-                        )
-                    }
-                } catch (e: Exception) {
-                    val errMsg = e.message?.replace("\\", "\\\\")?.replace("'", "\\'") ?: "Unknown error"
-                    webView?.post {
-                        webView?.evaluateJavascript(
-                            "window.__bridgeResult('$callbackId', {success:false,error:'$errMsg'});", null
-                        )
+            scope.launch {
+                val result = withContext(Dispatchers.IO) {
+                    PluginImageSave.write(base64Data, uri == null) {
+                        context.contentResolver.openOutputStream(requireNotNull(uri), "wt")
                     }
                 }
-            } else {
-                webView?.post {
-                    webView?.evaluateJavascript(
-                        "window.__bridgeResult('$callbackId', {success:false,error:'User cancelled'});", null
-                    )
-                }
+                if (result.optBoolean("success")) result.put("fileName", uri?.lastPathSegment ?: "saved_file")
+                webView?.evaluateJavascript(
+                    "window.__bridgeResult(${JSONObject.quote(callbackId)}, JSON.parse(${JSONObject.quote(result.toString())}));",
+                    null,
+                )
+                pendingSaveCallbackId = null
+                pendingSaveBase64Data = null
             }
-            pendingSaveCallbackId = null
-            pendingSaveBase64Data = null
         }
     }
 
@@ -581,9 +565,23 @@ fun PluginWebViewPage(
                                     audioFileImportLauncher.launch(arrayOf("audio/*"))
                                 },
                                 onSaveFileAs = { callbackId, fileName, base64Data ->
-                                    pendingSaveCallbackId = callbackId
-                                    pendingSaveBase64Data = base64Data
-                                    saveFileAsLauncher.launch(fileName)
+                                    if (pendingSaveCallbackId != null) {
+                                        webView?.evaluateJavascript(
+                                            "window.__bridgeResult(${JSONObject.quote(callbackId)}, {success:false,error:'Another save is in progress'});", null
+                                        )
+                                    } else {
+                                        pendingSaveCallbackId = callbackId
+                                        pendingSaveBase64Data = base64Data
+                                        try {
+                                            saveFileAsLauncher.launch(fileName)
+                                        } catch (_: Exception) {
+                                            pendingSaveCallbackId = null
+                                            pendingSaveBase64Data = null
+                                            webView?.evaluateJavascript(
+                                                "window.__bridgeResult(${JSONObject.quote(callbackId)}, {success:false,error:'Cannot open save picker'});", null
+                                            )
+                                        }
+                                    }
                                 },
                                 onClose = onNavigateBack,
                                 onStartTimer = { wv, seconds ->
@@ -1543,8 +1541,11 @@ private class PluginWebViewClient(
                         // The co-watch plugin already attaches the exact cropped video frame.
                         // Calling take_screenshot again captures the chat/WebView instead and can
                         // override the valid frame with stale UI text (for example old OCR tests).
-                        // Keep tools available as a fallback only when no frame was attached.
-                        enableTools = !attachedFrame,
+                        // Automatic co-watch messages deliberately suppress tools because the exact
+                        // video frame is already attached. Manual plugin messages (for example the
+                        // NAI studio sending an img2img base image) must keep the normal tool surface;
+                        // otherwise the assistant receives the image but cannot call nai_draw.
+                        enableTools = !(isAutomaticWatchMessage && attachedFrame),
                     )
                     JSONObject().put("success", true).put("status", "accepted")
                 }
@@ -1617,6 +1618,22 @@ private class PluginWebViewClient(
                     webView.evaluateJavascript(
                         "window.__bridgeResult('$callbackId', {success:true});", null
                     )
+                }
+            }
+
+            "saveImageAsset" -> {
+                val callbackId = params["callbackId"].orEmpty()
+                scope.launch {
+                    try {
+                        val asset = withContext(Dispatchers.IO) {
+                            PluginImageSave.load(dataStore, params["assetKey"].orEmpty())
+                        }
+                        onSaveFileAs(callbackId, asset.fileName, asset.encoded)
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (_: Exception) {
+                        postBridgeJson(webView, callbackId, JSONObject().put("success", false).put("error", "Image asset unavailable"))
+                    }
                 }
             }
 
@@ -1919,6 +1936,9 @@ private const val bridgeJavascript = """
         },
         writeFile: function(fileName, base64Data) {
             return bridgeCall('writeFile', {fileName: fileName, data: base64Data});
+        },
+        saveImageAsset: function(assetKey) {
+            return bridgeCall('saveImageAsset', {assetKey: assetKey});
         },
         saveFileAs: function(fileName, base64Data) {
             return bridgeCall('saveFileAs', {fileName: fileName, data: base64Data});

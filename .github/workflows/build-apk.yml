@@ -72,6 +72,9 @@ jobs:
       - name: Test app and AI regressions
         run: ./gradlew :app:testDebugUnitTest :ai:testDebugUnitTest :app:compileDebugAndroidTestKotlin
 
+      - name: Test Image Atelier plugin regressions
+        run: node --test plugins/image-atelier/tests/references.test.cjs
+
       - name: Build APK
         run: ./gradlew :app:assembleRelease -PorangechatAbis=arm64-v8a -PorangechatUniversalApk=false
 

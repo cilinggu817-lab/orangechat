@@ -1280,7 +1280,7 @@ class ChatService(
                 )
             )
         }
-        addAll(pluginToolProvider.getTools())
+        addAll(pluginToolProvider.getTools(conversation.currentMessages, conversation.id.toString()))
     }
 
     private suspend fun createWorkspaceToolsIfReady(workspaceId: String?, cwd: String? = null): List<Tool> {

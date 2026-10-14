@@ -1,0 +1,478 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>绘图工坊</title><style>
+*{box-sizing:border-box}body{margin:0;background:#f6f1ec;color:#433b3d;font:15px system-ui}main{max-width:480px;margin:auto;padding:24px 16px 80px}h1{font-size:25px}h2{font-size:17px;margin:0 0 12px}.card{background:#fffdf9;border:1px solid #e7dad7;border-radius:18px;padding:17px;margin:15px 0}small,.muted{color:#8b7578;line-height:1.7}label{display:block;font-size:13px;margin-top:12px}input,select,textarea,button{width:100%;padding:11px;border:1px solid #e6d9d5;border-radius:10px;background:white;color:inherit;font:inherit;margin-top:5px}textarea{min-height:95px;resize:vertical}button{background:#875363;color:white;border:0;margin-top:12px;cursor:pointer}button:disabled{opacity:.45;cursor:not-allowed}button.soft{background:#eee2df;color:#654c53}.danger{background:#f4dddd!important;color:#973c43!important}.row{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.row>*{min-width:0}.note{background:#eee4d7;border-radius:10px;padding:11px;font-size:13px;line-height:1.6}input[type=checkbox]{width:auto}pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px}img{max-width:100%;border-radius:12px;margin-top:10px}summary{cursor:pointer;padding:10px 0}#msg{white-space:pre-wrap;font-size:13px;line-height:1.6}a{color:#875363}.badge{font-size:12px;background:#eadde0;padding:4px 8px;border-radius:12px}#uploadPreview{max-height:180px;object-fit:contain}#toast{position:fixed;left:50%;bottom:26px;transform:translateX(-50%);width:calc(100% - 32px);max-width:448px;background:#483d42;color:white;border-radius:13px;padding:13px 16px;box-shadow:0 5px 24px #0003;z-index:1000;white-space:pre-wrap;line-height:1.5;font-size:14px;pointer-events:none}#toast[data-kind=error]{background:#8e3942}
+
+main,.card,fieldset{min-width:0}fieldset{min-inline-size:0}input,select,textarea,button{min-width:0;max-width:100%}button{white-space:normal;overflow-wrap:anywhere;line-height:1.5}.card,p,label,small,#msg{overflow-wrap:anywhere}input[type=checkbox]{flex-shrink:0}.panel>summary{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:0;list-style:none;min-height:30px}.panel>summary::-webkit-details-marker{display:none}.panel>summary h2{margin:0}.panel>summary::after{content:'›';font-size:25px;line-height:1;color:#875363;transition:transform .15s;flex-shrink:0}.panel[open]>summary::after{transform:rotate(90deg)}.panel[open]>summary{margin-bottom:12px}.panel>summary:focus-visible{outline:2px solid #875363;outline-offset:5px;border-radius:4px}
+</style></head><body><main>
+<small>IMAGE ATELIER</small><h1>绘图工坊 <span class="badge">v0.3.8</span></h1><p class="muted">你调好工作台，我接着画。</p><div id="msg" role="status">连接橘瓣中…</div>
+
+<section class="card"><h2>出图通道</h2>
+<select id="transport"><option value="url">聊天展示 · URL通道</option><option value="native">完整参数 · 原生通道</option></select>
+<p class="note" id="routeNote"></p>
+<small>提示：网络超时取决于宿主版本。若后台已扣点，可去酸薄荷作品库查看原图；插件不会自动重发。高步数可能增加 Anlas 消耗，建议先用28步验收。</small>
+</section>
+
+<section class="card"><h2>画风与人物</h2>
+<label>画风</label><select id="style"></select>
+<label>负面</label><select id="negative"></select>
+<label>人物卡（可多选）</label><div id="characters"></div>
+<small>文生图使用此处的画风与负面；图生图在下方改图区单独选择，默认不污染底图风格。</small>
+</section>
+
+<section class="card"><details class="panel" id="canvasPanel"><summary><h2>画布与模式</h2></summary>
+<label>模型</label><select id="model"><option>nai-diffusion-5-full</option><option>nai-diffusion-5-curated</option><option>nai-diffusion-4-5-full</option><option>nai-diffusion-4-5-curated</option></select>
+<label>画面比例</label>
+<select id="ratio"><option value="1344,768">16:9 · 1344 × 768</option><option value="1216,832">3:2 · 1216 × 832</option><option value="1152,896">4:3 · 1152 × 896</option><option value="1024,1024">1:1 · 1024 × 1024</option><option value="896,1152">3:4 · 896 × 1152</option><option value="832,1216">2:3 · 832 × 1216</option><option value="768,1344">9:16 · 768 × 1344</option><option value="custom">自定义尺寸</option></select>
+<div class="row"><label>宽<input id="width" type="number" step="64"></label><label>高<input id="height" type="number" step="64"></label></div>
+<label>模式</label><select id="mode"><option value="generate">文生图</option><option value="img2img">图生图</option></select>
+
+<div id="imageBox">
+<label>选择底图<input id="file" type="file" accept="image/png,image/jpeg,image/webp"></label>
+<button id="loadChatImage" class="soft">载入机刚从聊天导入的底图</button><img id="uploadPreview" hidden><p id="imageLabel" class="muted"></p>
+<button id="upscaleInput" class="soft">放大当前底图 · 宽高各2倍</button><small>独立放大，不使用提示词。可能扣费；本版仅处理不超过1048576像素的PNG底图，结果另存。</small>
+<button id="clearImage" class="soft">清除底图</button>
+<div id="i2iChat" style="margin-top:12px">
+<textarea id="i2iIdea" placeholder="写下你想改什么，比如：把背景换成花园，保留人物动作" style="min-height:60px"></textarea>
+<button id="i2iSend" class="soft">把底图和想法发到聊天，让机改</button>
+</div>
+<div class="row"><label>重绘强度<input id="strength" type="number" step="0.05" min="0" max="1"></label><label>噪声<input id="noise" type="number" step="0.05" min="0" max="1"></label></div>
+<div class="row"><label>改图画风<select id="i2i_style"></select></label><label>改图负面<select id="i2i_negative"></select></label></div>
+<small>改图时默认不强塞文生图画风/负面，风格由底图承载；未显式指定种子时不发送种子。图生图可能改变整张图的细节，并非只修改局部。底图保存在本地，提交时才发给酸薄荷。</small>
+</div>
+</details>
+</section>
+
+<section class="card"><details class="panel" id="vibePanel"><summary><h2>Vibe 氛围参考</h2></summary>
+<label><input id="vibe_enabled" type="checkbox"> 本次启用 Vibe</label>
+<p class="note">仅 V4.5 原生通道。导入免费，编码与生成分开计费。编码估算每张 2 Anlas；相同源图、模型、信息提取量可复用。不能与精准参考同时启用。</p>
+<label for="vibe_file">从手机添加参考图</label><input id="vibe_file" type="file" accept="image/png,image/jpeg,image/webp" multiple>
+<label for="vibe_asset_id">本地素材编号（可由机从聊天导入）</label><input id="vibe_asset_id" placeholder="chat_… / input_…">
+<button id="vibe_add" class="soft">按编号添加 Vibe</button><button id="vibe_latest" class="soft">添加最近聊天导入图</button>
+<div id="vibe_list"></div>
+<small>只改变参考选择，不改变图生图底图。下方“保存为默认配置”才会长期保存。</small>
+</details>
+</section>
+<section class="card"><details class="panel" id="precisePanel"><summary><h2>精准参考</h2></summary>
+<label><input id="precise_enabled" type="checkbox"> 本次启用精准参考</label>
+<p class="note">仅 V4.5 原生通道。角色／画风参考，生成附加费用估算每张 5 Anlas；不与人物卡一一绑定。不能与 Vibe 同时启用。图片在提交时按平台规格等比例补黑边，不改原素材。</p>
+<label for="precise_file">从手机添加参考图</label><input id="precise_file" type="file" accept="image/png,image/jpeg,image/webp" multiple>
+<label for="precise_asset_id">本地素材编号</label><input id="precise_asset_id" placeholder="chat_… / input_…">
+<button id="precise_add" class="soft">按编号添加精准参考</button><button id="precise_latest" class="soft">添加最近聊天导入图</button>
+<div id="precise_list"></div>
+</details>
+</section>
+
+<section class="card"><details class="panel" id="advancedPanel"><summary><h2>高级参数</h2></summary>
+<fieldset id="advanced" style="border:0;padding:0">
+<label>采样器<select id="sampler"><option>k_dpmpp_2m</option><option>k_dpmpp_sde</option><option>k_euler</option><option>k_euler_ancestral</option><option>k_dpmpp_2s_ancestral</option><option>ddim_v3</option></select></label>
+<label>噪声调度<select id="noise_schedule"><option>karras</option><option>native</option><option>exponential</option><option>polyexponential</option></select></label>
+<div class="row"><label>步数<input id="steps" type="number"></label><label>CFG<input id="scale" type="number" step="0.1"></label><label>CFG Rescale<input id="cfg_rescale" type="number" step="0.05"></label><label>种子（空=随机）<input id="seed" type="number"></label></div>
+</fieldset>
+</details>
+<button id="save" disabled>保存为默认配置</button>
+</section>
+
+<section class="card"><h2>试画与预览</h2>
+<textarea id="prompt" placeholder="画面描述（动作、服饰、场景等）"></textarea>
+<button id="preview" class="soft" disabled>检查请求参数 · 不扣费</button>
+<button id="generate" disabled>生成一张 · 消耗点数</button>
+<details><summary>请求参数预览</summary><pre id="previewText"></pre></details>
+</section>
+
+<section class="card"><h2>预设管理</h2>
+<div class="row"><select id="kind"><option value="styles">画风</option><option value="negatives">负面</option><option value="characters">人物卡</option></select><select id="entry"></select></div>
+<small id="editStatus" aria-live="polite"></small>
+<button id="presetNew" class="soft" disabled>＋ 新增预设</button>
+<label>预设名称<input id="name"></label><label>预设正文<textarea id="text"></textarea></label><label id="pairLabel">推荐负面名称<input id="pair"></label>
+<div class="row"><button id="presetSave" disabled>保存预设</button><button id="presetDelete" class="danger" disabled>删除预设</button></div>
+<details><summary>导入 / 导出预设 JSON</summary>
+<textarea id="presetJson" placeholder="粘贴 JSON 内容"></textarea>
+<button id="import" class="soft">导入预设</button><button id="export" class="soft">导出预设</button>
+</details>
+</section>
+
+
+
+<section class="card"><h2>自动验收</h2>
+<label style="display:flex;align-items:center;gap:8px"><input id="autoView" type="checkbox" style="width:auto"> 页面打开时，新图自动发到聊天一起看</label>
+<p class="muted" id="autoViewTarget">未选择聊天</p>
+<button id="autoViewPick" class="soft">选择看图聊天</button>
+<small>开启后，页面打开期间的新图会自动发送到选定聊天，和机一起看。发送未确认时不会自动重发。配文为：“图生出来啦，咱们一起看看吧？”</small>
+</section>
+
+<section class="card"><h2>出图记录（最新15条）</h2>
+<button id="refresh" class="soft" disabled>刷新记录</button>
+<div id="history"></div>
+<div id="viewer"></div>
+</section>
+</main>
+
+<div id="toast" role="status" aria-live="polite" hidden></div>
+<script>var exports={};</script>
+<script src="../main.js"></script>
+<script src="references.js"></script>
+<script>
+var $ = function(x) { return document.getElementById(x); }, S = null, imageId = '', working = false, creating = false, editingName = '', toastTimer = null;
+function say(t, kind) {
+  $('msg').textContent = t;
+  var toast = $('toast'); toast.textContent = t; toast.dataset.kind = kind || 'info'; toast.hidden = false;
+  clearTimeout(toastTimer); toastTimer = setTimeout(function() { toast.hidden = true; }, kind === 'error' ? 5000 : 3200);
+}
+function parse(x) { return typeof x === 'string' ? JSON.parse(x) : x; }
+async function get(k, f) { var r = await Bridge.getData(k); return r ? parse(r) : f; }
+async function writeText(k, text) {
+  var r = parse(await Bridge.setData(k, text));
+  if (r === false || (r && r.success === false) || await Bridge.getData(k) !== text) throw Error('本地保存失败，请检查存储空间');
+}
+async function set(k, v) { await writeText(k, JSON.stringify(v)); }
+async function safe(fn) { try { await fn(); } catch(e) { say(e.message || String(e), 'error'); } }
+function opts(el, arr) { el.replaceChildren(); arr.forEach(function(n) { var o = document.createElement('option'); o.value = n; o.textContent = n || '不使用'; el.appendChild(o); }); }
+
+var fields = Object.keys(NAI.initial().defaults).filter(function(k) { return k !== 'characters' && k !== 'image_id' && !/^(vibe|precise)_/.test(k); });
+
+function fill() {
+  opts($('style'), [''].concat(Object.keys(S.presets.styles)));
+  opts($('negative'), ['跟随画风', ''].concat(Object.keys(S.presets.negatives)));
+  opts($('i2i_style'), [''].concat(Object.keys(S.presets.styles)));
+  opts($('i2i_negative'), [''].concat(Object.keys(S.presets.negatives)));
+  fields.forEach(function(k) { $(k).value = S.defaults[k] === null ? '' : S.defaults[k]; });
+  imageId = S.defaults.image_id || '';
+  fillReferences(S.defaults);
+  $('characters').replaceChildren();
+  Object.keys(S.presets.characters).forEach(function(n) {
+    var l = document.createElement('label'), c = document.createElement('input');
+    c.type = 'checkbox'; c.value = n; c.checked = S.defaults.characters.indexOf(n) >= 0;
+    l.appendChild(c); l.appendChild(document.createTextNode(' ' + n)); $('characters').appendChild(l);
+  });
+  sync(); editorList(); safe(refreshInputPreview);
+}
+
+
+async function refreshInputPreview() {
+  var id = imageId;
+  $('uploadPreview').hidden = true; $('uploadPreview').removeAttribute('src');
+  if (!id) return;
+  var a = await asset(id);
+  if (imageId !== id) return;
+  $('uploadPreview').src = a.src; $('uploadPreview').hidden = false;
+}
+
+function sync() {
+  var u = $('transport').value === 'url';
+  $('advanced').disabled = u; $('seed').disabled = u; $('mode').disabled = u; $('imageBox').hidden = u || $('mode').value !== 'img2img';
+  $('routeNote').textContent = u ? 'URL通道：基础出图并返回图片链接。需要控制步数、采样器或底图重绘，请选择原生通道。' : '原生通道：发送完整采样参数，支持底图重绘。新版宿主可在聊天工具结果中直接附图；页面生成仍使用自动验收或手动发图。';
+  $('imageLabel').textContent = imageId ? '当前已选底图：' + imageId : '未选择底图';
+  var v = $('width').value + ',' + $('height').value;
+  $('ratio').value = Array.from($('ratio').options).some(function(o) { return o.value === v; }) ? v : 'custom';
+}
+
+function collect() {
+  var d = {};
+  fields.forEach(function(k) {
+    var v = $(k).value;
+    d[k] = k === 'seed' ? (v.trim() ? Number(v) : null) : ['steps', 'scale', 'cfg_rescale', 'width', 'height', 'strength', 'noise'].includes(k) ? Number(v) : v;
+  });
+  d.image_id = imageId;
+  d.characters = Array.from($('characters').querySelectorAll('input:checked')).map(function(e) { return e.value; });
+  collectReferences(d);
+  NAI.validate(d, S.presets);
+  return d;
+}
+
+async function save(next) {
+  NAI.validate(next.defaults, next.presets);
+  next.revision = S.revision + 1;
+  await set(NAI.KEY, next);
+  S = next;
+  say('默认配置已保存');
+}
+
+function editorList() { opts($('entry'), Object.keys(S.presets[$('kind').value])); editor(); }
+function editor() {
+  var k = $('kind').value, n = $('entry').value, p = S.presets[k][n] || {};
+  creating = !n; editingName = n || '';
+  $('name').value = n; $('text').value = p.text || '';
+  $('pair').value = Object.prototype.hasOwnProperty.call(p, 'negative') ? p.negative : (Object.keys(S.presets.negatives)[0] || '');
+  $('pairLabel').hidden = k !== 'styles';
+  $('editStatus').textContent = n ? '正在编辑：' + n : '请填写名称和内容后保存';
+  $('presetSave').textContent = creating ? '保存新增' : '保存修改';
+  $('presetDelete').disabled = creating;
+}
+function freshPreset() {
+  creating = true; editingName = ''; $('entry').value = ''; $('name').value = ''; $('text').value = '';
+  $('pair').value = Object.keys(S.presets.negatives)[0] || '';
+  $('editStatus').textContent = '新增模式：输入名称与内容后保存';
+  $('presetSave').textContent = '保存新增'; $('presetDelete').disabled = true; $('name').focus();
+}
+
+function newId(prefix) { return prefix + '_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8); }
+async function tool(n, p) { return parse(await Bridge.callTool(n, JSON.stringify(p || {}))); }
+async function asset(id) {
+  var a = await get('nai.asset.' + id, null);
+  if (!a) throw Error('底图不存在');
+  var b = '';
+  for (var i = 0; i < a.chunks; i++) {
+    var c = await Bridge.getData('nai.asset.' + id + '.' + i);
+    if (!c) throw Error('底图分片缺失');
+    b += c;
+  }
+  return { mime: a.mime, b64: b, src: 'data:' + a.mime + ';base64,' + b };
+}
+
+function button(parent, text, fn) {
+  var b = document.createElement('button'); b.textContent = text; b.className = 'soft';
+  b.onclick = function() { safe(fn); }; parent.appendChild(b); return b;
+}
+
+function statusLabel(s) {
+  return { sending: '生成中…', succeeded: '出图成功', failed: '生成失败', response_unreadable: '结果读取未完成（请核查平台）', timeout_or_network: '网络超时（可去薄荷后台查看）', demo: '测试图' }[s] || s;
+}
+
+async function view(j) {
+  var v = $('viewer'); v.replaceChildren();
+  var title = document.createElement('p'); title.style.fontWeight = 'bold';
+  title.textContent = (j.id || '任务') + ' · ' + statusLabel(j.status); v.appendChild(title);
+  var src = j.url, a = null;
+  if (j.asset) { try { a = await asset(j.asset); src = a.src; } catch(e) {} }
+  if (src) {
+    var img = document.createElement('img'); img.src = src; img.alt = '生成结果'; v.appendChild(img);
+    if (j.url) {
+      var link = document.createElement('a'); link.href = j.url; link.target = '_blank'; link.rel = 'noopener';
+      link.textContent = '打开原图，在浏览器下载保存'; link.style.display = 'block'; link.style.margin = '8px 0'; v.appendChild(link);
+      button(v, '复制聊天 Markdown 链接', async function() {
+        await navigator.clipboard.writeText('![绘图结果](' + j.url + ')');
+        say('Markdown 已复制');
+      });
+    }
+    if (a) {
+      button(v, '保存图片到手机', function() { return downloadAsset(j.asset); });
+      button(v, '放大此图 · 宽高各2倍', function() { return upscaleImage(j.asset); });
+      button(v, '用这张图继续改图', function() {
+        var eff = j.effective || {};
+        $('transport').value = 'native'; $('mode').value = 'img2img';
+        $('i2i_style').value = ''; $('i2i_negative').value = ''; $('seed').value = '';
+        Array.from($('characters').querySelectorAll('input')).forEach(function(c) { c.checked = false; });
+        if (eff.mode !== 'upscale') { $('width').value = eff.width || $('width').value; $('height').value = eff.height || $('height').value; }
+        imageId = j.asset; sync(); $('uploadPreview').src = a.src; $('uploadPreview').hidden = false; $('canvasPanel').open = true;
+        $('prompt').value = ''; $('prompt').placeholder = '写下你想针对此图调整的地方…';
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+        say('已载入底图；未带入画风、负面、人物卡或种子。需要时可自行选择');
+      });
+    }
+    button(v, '发送这张图到聊天让机看', async function() { await sendImage(src, v); });
+  }
+  if (j.error) {
+    var errP = document.createElement('p'); errP.style.color = '#973c43';
+    errP.textContent = '提示：' + j.error; v.appendChild(errP);
+  }
+}
+
+var savingImage = false;
+async function downloadAsset(id) {
+  if (savingImage) return;
+  savingImage = true;
+  try {
+    var r;
+    if (typeof Bridge.saveImageAsset === 'function') {
+      r = parse(await Bridge.saveImageAsset('nai.asset.' + id));
+    } else {
+      var a = await asset(id);
+      if (typeof Bridge.saveFileAs !== 'function') throw Error('当前宿主不支持保存文件，请更新橘瓣');
+      if (a.b64.length > 1000000) throw Error('此图较大，需要配套宿主的图片保存接口，避免传输截断。请更新橘瓣后保存');
+      var ext = {'image/png':'.png','image/jpeg':'.jpg','image/webp':'.webp'}[a.mime];
+      if (!ext) throw Error('不支持的图片类型');
+      r = parse(await Bridge.saveFileAs(id + ext, a.b64));
+    }
+    if (r && (r.cancelled || r.error === 'User cancelled')) { say('已取消保存'); return; }
+    if (!r || r.success !== true) throw Error((r && r.error) || '保存未确认');
+    say('图片已保存');
+  } finally { savingImage = false; }
+}
+$('loadChatImage').onclick = function() { safe(async function() {
+  var latest = await get('nai.chat.latest', null);
+  if (!latest || !latest.image_id) throw Error('暂无聊天导入图片。请先在聊天中让机调用 nai_chat_image；需要配套宿主支持');
+  imageId = latest.image_id;
+  $('transport').value = 'native'; $('mode').value = 'img2img'; $('seed').value = '';
+  sync(); await refreshInputPreview(); say('聊天底图已载入，未生成，也未覆盖默认配置');
+}); };
+async function upscaleImage(id) {
+  if (working) { say('已有任务处理中，请等待'); return; }
+  if (!id) throw Error('请先选择底图');
+  working = true;
+  try {
+    var req = newId('upscale');
+    var check = await tool('nai_upscale', {image_id:id, request_id:req, preview:true});
+    if (!check.success) throw Error(check.error || '底图检查失败');
+    if (!confirm('原图 ' + check.input.width + '×' + check.input.height + ' → ' + check.effective.width + '×' + check.effective.height + '。原生放大可能扣费，具体费用以平台为准。结果另存，继续？')) return;
+    say('正在放大，请勿重复提交…');
+    var r = await tool('nai_upscale', {image_id:id, request_id:req, confirmed:true});
+    say(r.success ? '放大完成，原图已保留' : (r.error || '结果未确认，请核查平台'), r.success ? 'info' : 'error');
+    await history(); var j = await get('nai.job.' + req, null); if (j) await view(j);
+  } finally { working = false; }
+}
+$('upscaleInput').onclick = function() { safe(function() { return upscaleImage(imageId); }); };
+async function sendImage(src, parent) {
+  if (!Bridge.listWatchConversations || !Bridge.sendWatchMessage) throw Error('宿主不支持会话发图');
+  var r = parse(await Bridge.listWatchConversations()); var list = r && r.conversations;
+  if (!Array.isArray(list) || !list.length) throw Error('未找到可用聊天');
+  var box = document.createElement('div'), sel = document.createElement('select');
+  list.forEach(function(c) {
+    var id = c.id || c.conversationId; if (!id) return;
+    var o = document.createElement('option'); o.value = id; o.textContent = c.title || id; sel.appendChild(o);
+  });
+  box.appendChild(sel); parent.appendChild(box);
+  button(box, '确认发送到该聊天', async function() {
+    var targetTitle = sel.selectedOptions[0].textContent;
+    var frame = src;
+    if (!src.startsWith('data:')) {
+      var im = new Image(); im.crossOrigin = 'anonymous';
+      await new Promise(function(ok, no) { im.onload = ok; im.onerror = function() { no(Error('图片跨域读取失败')); }; im.src = src; });
+      var cv = document.createElement('canvas'), scale = Math.min(1, 1280 / Math.max(im.width, im.height));
+      cv.width = Math.round(im.width * scale); cv.height = Math.round(im.height * scale);
+      cv.getContext('2d').drawImage(im, 0, 0, cv.width, cv.height);
+      frame = cv.toDataURL('image/jpeg', 0.9);
+    }
+    var sent = parse(await Bridge.sendWatchMessage(sel.value, '图生出来啦，咱们一起看看吧？', '', frame));
+    if (!sent || sent.success !== true) throw Error('发送未确认');
+    say('已发到聊天：「' + targetTitle + '」');
+  });
+}
+
+async function history() {
+  var ids = await get('nai.history', []);
+  $('history').replaceChildren();
+  for (var id of ids.slice(0, 15)) {
+    var j = await get('nai.job.' + id, null);
+    if (j) {
+      (function(job) {
+        button($('history'), job.id + ' · ' + statusLabel(job.status), function() { return view(job); });
+      })(j);
+    }
+  }
+}
+
+$('save').onclick = function() { safe(async function() { var n = NAI.copy(S); n.defaults = collect(); await save(n); }); };
+$('presetNew').onclick = function() { safe(freshPreset); };
+$('presetSave').onclick = function() { safe(async function() {
+  var k = $('kind').value, name = $('name').value.trim(), text = $('text').value.trim(), oldName = editingName, isNew = creating;
+  if (!name || !text) throw Error('请填写预设名称与正文');
+  var item = { text: text };
+  if (k === 'styles') item.negative = $('pair').value.trim();
+  var n = NAI.editPreset(S, k, isNew ? '' : oldName, name, item);
+  await save(n); fill(); $('kind').value = k; editorList(); $('entry').value = name; editor();
+  say('预设已保存');
+}); };
+$('presetDelete').onclick = function() { safe(async function() {
+  if (creating || !editingName) throw Error('请先选择预设');
+  var name = editingName, k = $('kind').value;
+  if (!confirm('确定删除「' + name + '」？')) return;
+  var n = NAI.editPreset(S, k, name, '', null);
+  await save(n); fill(); $('kind').value = k; editorList();
+  say('预设已删除');
+}); };
+
+$('import').onclick = function() { safe(async function() {
+  var data = JSON.parse($('presetJson').value), n = NAI.copy(S), maps = data.presets || data;
+  ['styles', 'negatives', 'characters'].forEach(function(k) {
+    if (!maps[k]) return;
+    Object.keys(maps[k]).forEach(function(name) {
+      var x = maps[k][name], text = typeof x === 'string' ? x : (x.text || [x.base, x.signature].filter(Boolean).join(', '));
+      if (text) { n.presets[k][name] = { text: text }; if (k === 'styles') n.presets[k][name].negative = x.negative || ''; }
+    });
+  });
+  await save(n); fill(); say('预设导入成功');
+}); };
+$('export').onclick = function() { $('presetJson').value = JSON.stringify(S.presets, null, 2); say('已导出预设配置'); };
+
+function drawOverrides(d) {
+  if (d.transport !== 'url') return NAI.copy(d);
+  return Object.fromEntries(Object.entries(d).filter(function(e) {
+    return ['steps','scale','cfg_rescale','sampler','noise_schedule','seed','strength','noise'].indexOf(e[0]) < 0;
+  }));
+}
+async function previewDraw(prompt, overrides) {
+  var r = await tool('nai_draw', {prompt:prompt, request_id:newId('preview'), preview:true, overrides:JSON.stringify(overrides)});
+  if (!r.success) throw Error(r.error || '请求参数检查失败');
+  return r;
+}
+$('preview').onclick = function() { safe(async function() {
+  var r = await previewDraw($('prompt').value, drawOverrides(collect()));
+  $('previewText').textContent = JSON.stringify(r, null, 2);
+  $('previewText').parentElement.open = true; say('参数检查完成，未发起生成');
+}); };
+
+$('generate').onclick = function() { safe(async function() {
+  if (working) return;
+  var d = collect(), prompt = $('prompt').value, overrides = drawOverrides(d);
+  working = true; $('generate').disabled = true;
+  try {
+    await previewDraw(prompt, overrides);
+    if (!confirm('将提交一次付费' + (d.mode === 'img2img' ? '图生图' : '生成') + '。费用尚未核实，以平台实际扣费为准；高步数或大尺寸可能明显增加费用。继续？')) return;
+    var id = newId('draw'); say('正在生成中，请稍候…');
+    var r = await tool('nai_draw', { prompt: prompt, request_id: id, overrides: JSON.stringify(overrides) });
+    if (r.status === 'timeout_or_network') say('请求超时啦，如果后台扣了点数，可直接去薄荷后台看原图哦！', 'error');
+    else if (r.status === 'succeeded') say('生图成功！');
+    else say(r.error || ('状态：' + r.status));
+    await history();
+    var j = await get('nai.job.' + id, null);
+    if (j) await view(j);
+  } finally {
+    working = false; $('generate').disabled = false;
+  }
+}); };
+
+$('refresh').onclick = function() { safe(history); };
+
+$('file').onchange = function() { safe(async function() {
+  var f = $('file').files[0]; if (!f) return;
+  imageId = await importLocalImage(f, 1536);
+  await refreshInputPreview(); sync(); say('底图已加载，点击“保存为默认配置”可长期生效');
+}); };
+
+$('clearImage').onclick = function() { imageId = ''; $('uploadPreview').removeAttribute('src'); $('uploadPreview').hidden = true; $('file').value = ''; sync(); say('底图已清除'); };
+$('i2iSend').onclick = function() { safe(async function() {
+  if (!imageId) throw Error('请先选择一张底图');
+  var idea = $('i2iIdea').value.trim();
+  if (!idea) throw Error('写几个字告诉机你想改什么吧');
+  var a = await asset(imageId);
+  if (!Bridge.listWatchConversations || !Bridge.sendWatchMessage) throw Error('当前宿主不支持发送图片到聊天');
+  var list = parse(await Bridge.listWatchConversations());
+  var convs = (list && list.conversations || []).filter(function(c) { return typeof c.id === 'string' && c.id; });
+  if (!convs.length) throw Error('没有可用聊天');
+  var cfg = await avConfig(); var target = avResolve(cfg.target, convs);
+  if (!confirm('将底图和改图想法发送到「' + (target.title || target.id) + '」？此操作仅发送消息，不直接提交生图。')) return;
+  var text = '帮我改一下这张图：' + idea + '\n\n（底图素材编号：' + imageId + '，已在插件本地，直接用 nai_draw 图生图即可）';
+  var sent = parse(await Bridge.sendWatchMessage(target.id, text, '', a.src));
+  if (!sent || sent.success !== true) throw Error('发送未确认，请检查聊天');
+  say('已发到「' + (target.title || '聊天') + '」，请在聊天里确认改图参数');
+  $('i2iIdea').value = '';
+}); };
+$('ratio').onchange = function() {
+  if (this.value !== 'custom') { var x = this.value.split(','); $('width').value = x[0]; $('height').value = x[1]; }
+};
+['width', 'height'].forEach(function(k) { $(k).onchange = sync; });
+$('mode').onchange = function() { if (this.value === 'img2img') $('seed').value = ''; sync(); };
+$('transport').onchange = function() { if (this.value === 'url') $('mode').value = 'generate'; sync(); };
+$('kind').onchange = editorList; $('entry').onchange = editor;
+
+async function init() {
+  try {
+    S = await get(NAI.KEY, NAI.initial());
+    S.defaults = Object.assign(NAI.copy(NAI.initial().defaults), S.defaults || {});
+    NAI.validate(S.defaults, S.presets);
+    setupReferences(); fill();
+    ['save', 'presetNew', 'presetSave', 'preview', 'generate', 'refresh'].forEach(function(k) { $(k).disabled = false; });
+    say('工作台已就绪');
+    await history();
+  } catch(e) { say('加载失败：' + e.message, 'error'); }
+}
+
+var tries = 0;
+function wait() {
+  if (typeof Bridge !== 'undefined' && Bridge.getData) init();
+  else if (++tries < 100) setTimeout(wait, 80);
+  else say('请在橘瓣插件页打开', 'error');
+}
+wait();
+</script>
+<script src="autoview.js"></script>
+</body></html>

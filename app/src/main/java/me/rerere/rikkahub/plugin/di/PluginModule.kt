@@ -11,6 +11,7 @@ import me.rerere.rikkahub.data.service.MemoryBankService
 import me.rerere.rikkahub.plugin.loader.PluginLoader
 import me.rerere.rikkahub.plugin.manager.PluginManager
 import me.rerere.rikkahub.plugin.provider.PluginImageResults
+import me.rerere.rikkahub.plugin.provider.PluginChatImages
 import me.rerere.rikkahub.plugin.provider.PluginToolProvider
 import me.rerere.rikkahub.plugin.repository.PluginRepository
 import me.rerere.rikkahub.plugin.scanner.PluginScanner
@@ -38,7 +39,8 @@ val pluginModule = module {
 
     // Provider - 需要PluginManager来确保插件已初始化
     single { PluginImageResults(androidContext(), get<me.rerere.rikkahub.data.files.FilesManager>()) }
-    single { PluginToolProvider(get(), get(), get()) }
+    single { PluginChatImages(androidContext()) }
+    single { PluginToolProvider(get(), get(), get(), get()) }
 
     // ViewModel
     viewModel { PluginViewModel(get()) }

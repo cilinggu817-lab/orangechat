@@ -262,12 +262,37 @@ function fetch(url, options) {
         headers: result.headers,
         body: result.body,
         text: function() { return result.body; },
-        json: function() { return JSON.parse(result.body); }
+        json: function() { return JSON.parse(result.body); },
+        base64: function() {
+            if (result.bodyEncoding !== 'base64') throw new Error('Request responseEncoding=base64 first');
+            return result.body;
+        }
     };
 }
+dataStore.setDurable = function(key, value) {
+    var result = JSON.parse(__dataStoreBridge('setDurable', JSON.stringify({key:key, value:value})));
+    return result.success === true;
+};
+var imageAssets = {
+    prepare: function(imageId, purpose) {
+        var result = JSON.parse(__prepareReferenceAsset(imageId, purpose));
+        if (result.error) throw new Error(result.error);
+        return result;
+    }
+};
 """.trimIndent())
  
             // 注入原生 fetch
+            getGlobalObject().setProperty("__prepareReferenceAsset", JSCallFunction { args ->
+                try {
+                    me.rerere.rikkahub.plugin.provider.PluginReferenceAssets.prepare(
+                        requireNotNull(dataStore), args[0] as? String ?: "", args[1] as? String ?: "",
+                    )
+                } catch (_: Exception) {
+                    """{"error":"Reference asset unavailable"}"""
+                }
+            })
+
             getGlobalObject().setProperty("__nativeFetch", JSCallFunction { args ->
                 val url = args[0] as? String ?: ""
                 val optionsJson = args[1] as? String ?: "{}"
@@ -310,7 +335,7 @@ function fetch(url, options) {
                 try {
                     nativeDataStoreBridge(action, paramsJson)
                 } catch (e: Exception) {
-                    Log.e(TAG, "DataStore bridge error: action=$action, params=$paramsJson", e)
+                    Log.e(TAG, "DataStore bridge error: action=$action", e)
                     """{"success":false,"error":${escapeJson(e.message ?: "Unknown error")}}"""
                 }
             })
@@ -364,6 +389,9 @@ function fetch(url, options) {
             }
  
             val fetchClient = okHttpClient.newBuilder()
+                .apply {
+                    if ((options["retry"] as? JsonPrimitive)?.contentOrNull == "false") retryOnConnectionFailure(false)
+                }
                 .connectTimeout(60, TimeUnit.SECONDS)
                 .readTimeout(60, TimeUnit.SECONDS)
                 .writeTimeout(60, TimeUnit.SECONDS)
@@ -374,7 +402,17 @@ function fetch(url, options) {
  
             val response = fetchClient.newCall(requestBuilder.build()).execute()
             response.use {
-                val responseBody = it.body.string()
+                val binary = (options["responseEncoding"] as? JsonPrimitive)?.contentOrNull == "base64"
+                val responseBody = if (binary) {
+                    val source = it.body.source()
+                    val buffer = okio.Buffer()
+                    while (!source.exhausted()) {
+                        val read = source.read(buffer, 8192)
+                        if (read < 0) break
+                        require(buffer.size <= 12000000) { "Binary response exceeds 12 MB" }
+                    }
+                    android.util.Base64.encodeToString(buffer.readByteArray(), android.util.Base64.NO_WRAP)
+                } else it.body.string()
                 val statusCode = it.code
                 val responseHeaders = it.headers
 
@@ -386,6 +424,7 @@ function fetch(url, options) {
                     append("{\"success\":true,")
                     append("\"status\":$statusCode,")
                     append("\"ok\":${statusCode in 200..299},")
+                    append("\"bodyEncoding\":\"${if (binary) "base64" else "text"}\",")
                     append("\"headers\":${json.encodeToString(JsonObject.serializer(), JsonObject(headersJson.mapValues { JsonPrimitive(it.value) }))},")
                     append("\"body\":${json.encodeToString(JsonPrimitive(responseBody))}")
                     append("}")
@@ -461,6 +500,12 @@ function fetch(url, options) {
         return try {
             val params = JSONObject(paramsJson)
             when (action) {
+                "setDurable" -> {
+                    val key = params.optString("key", "")
+                    require(key.isNotBlank())
+                    val saved = store.setDataDurable(key, params.optString("value", ""))
+                    """{"success":$saved}"""
+                }
                 "set" -> {
                     val key = params.optString("key", "")
                     val value = params.optString("value", "")
@@ -496,7 +541,7 @@ function fetch(url, options) {
                 }
             }
         } catch (e: Exception) {
-            Log.e(TAG, "DataStore bridge action='$action' failed, params=$paramsJson", e)
+            Log.e(TAG, "DataStore bridge action='$action' failed", e)
             """{"success":false,"error":${escapeJson(e.message ?: "Unknown error")}}"""
         }
     }

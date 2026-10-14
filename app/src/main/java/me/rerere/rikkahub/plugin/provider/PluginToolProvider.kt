@@ -14,6 +14,7 @@ import kotlinx.serialization.json.put
 import me.rerere.ai.core.InputSchema
 import me.rerere.ai.core.Tool
 import me.rerere.ai.ui.UIMessagePart
+import me.rerere.ai.ui.UIMessage
 import me.rerere.rikkahub.data.ai.tools.ToolNaming
 import me.rerere.rikkahub.plugin.model.PluginInfo
 import me.rerere.rikkahub.plugin.loader.PluginLoader
@@ -27,7 +28,8 @@ import me.rerere.rikkahub.plugin.model.PluginToolDefinition
 class PluginToolProvider(
     private val pluginLoader: PluginLoader,
     private val pluginManager: PluginManager,
-    private val imageResults: PluginImageResults
+    private val imageResults: PluginImageResults,
+    private val chatImages: PluginChatImages
 ) {
     private val json = Json {
         ignoreUnknownKeys = true
@@ -38,12 +40,12 @@ class PluginToolProvider(
      * 获取所有插件提供的工具
      * 会等待插件初始化完成，确保竞态条件下不会返回空列表
      */
-    suspend fun getTools(): List<Tool> {
+    suspend fun getTools(recentMessages: List<UIMessage> = emptyList(), conversationId: String? = null): List<Tool> {
         // 等待插件初始化完成，避免竞态条件导致工具列表为空
         pluginManager.awaitInitialization()
         return availablePlugins().flatMap { plugin ->
             plugin.manifest.tools.map { toolDef ->
-                createTool(plugin, toolDef)
+                createTool(plugin, toolDef, recentMessages, conversationId)
             }
         }
     }
@@ -66,7 +68,16 @@ class PluginToolProvider(
         it.isEnabled && it.loadError == null
     }
 
-    private fun createTool(plugin: PluginInfo, toolDef: PluginToolDefinition): Tool {
+    private fun createTool(
+        plugin: PluginInfo,
+        toolDef: PluginToolDefinition,
+        recentMessages: List<UIMessage> = emptyList(),
+        conversationId: String? = null,
+    ): Tool {
+        // Capture this call surface, never a global/currently displayed conversation.
+        val attachments = if (!conversationId.isNullOrBlank() && "conversation_sync" in plugin.manifest.permissions) {
+            recentMessages.map { it.copy(parts = it.parts.toList()) }
+        } else emptyList()
         return Tool(
             name = ToolNaming.buildPluginToolName(plugin.manifest.id, toolDef.name),
             description = buildDescription(plugin, toolDef),
@@ -78,7 +89,11 @@ class PluginToolProvider(
                 )
             },
             execute = { params ->
-                executeTool(plugin, toolDef, params)
+                if (plugin.manifest.id == "com.nanzhi.naistudio" && toolDef.name == "nai_chat_image") {
+                    listOf(UIMessagePart.Text(chatImages.execute(plugin.manifest.id, params, attachments, conversationId.orEmpty()).toString()))
+                } else {
+                    executeTool(plugin, toolDef, params)
+                }
             }
         )
     }

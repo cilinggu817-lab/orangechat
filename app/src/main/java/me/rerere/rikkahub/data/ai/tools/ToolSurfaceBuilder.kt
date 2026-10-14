@@ -90,6 +90,6 @@ class ToolSurfaceBuilder(
                 )
             )
         }
-        addAll(pluginToolProvider.getTools())
+        addAll(pluginToolProvider.getTools(recentMessages, invocationContext.callerConversationId))
     }
 }

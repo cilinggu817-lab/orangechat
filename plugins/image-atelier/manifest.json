@@ -1,0 +1,179 @@
+{
+  "id": "com.nanzhi.naistudio",
+  "name": "绘图工坊",
+  "description": "酸薄荷绘图工坊：聊天图片导入、原图保存、独立Vibe与精准参考（V4.5原生通道）。单次设置不改默认；保留已实测的2倍放大实现。",
+  "version": "0.3.9",
+  "permissions": [
+    "conversation_sync"
+  ],
+  "author": "绘图工坊开发组",
+  "icon": "🎨",
+  "entry": "main.js",
+  "allowedHosts": [
+    "create.suanbohe.com"
+  ],
+  "customPageWebView": {
+    "entry": "ui/index.html"
+  },
+  "config": [
+    {
+      "name": "api_key",
+      "type": "string",
+      "label": "酸薄荷 API Key",
+      "description": "仅填入个人酸薄荷Key。不要发到聊天。",
+      "required": true,
+      "placeholder": "sk-sb-..."
+    }
+  ],
+  "tools": [
+    {
+      "name": "nai_chat_image",
+      "description": "列出当前调用聊天分支的用户图片或图片文件，并按attachment_id免费导入本地PNG素材。先list再import。返回image_id可分别指定图生图底图、Vibe或精准参考用途；导入不编码、不生成、不改默认。不传路径或Base64。需配套宿主。",
+      "parameters": [
+        {
+          "name": "action",
+          "type": "string",
+          "required": true,
+          "description": "list或import"
+        },
+        {
+          "name": "attachment_id",
+          "type": "string",
+          "required": false,
+          "description": "import时从list原样复制"
+        }
+      ]
+    },
+    {
+      "name": "nai_status",
+      "description": "读取绘图工作台默认配置、预设名称和最近任务。不返回密钥或图片Base64。首次绘图前读取，优先继承用户页面设置。",
+      "parameters": []
+    },
+    {
+      "name": "nai_draw",
+      "description": "提交一张酸薄荷图片。正文只写画面动作服饰，插件拼接预设。request_id本次意图唯一，重试必须复用。preview=true仅预览不扣费。默认URL通道可返回Markdown供聊天展示，不代表模型已收到视觉。native通道返回Base64时保存本地，并通过新版宿主的图片附件协议回传；无需打开页面，不输出巨大编码。没有image_attached=true时不得声称已看到图片。图生图默认省略种子，画风/负面默认不带入，可用i2i_style/i2i_negative单独选择。不得未经用户要求改永久默认。 Vibe与精准参考仅支持V4.5原生通道且互斥；与图生图底图独立。Vibe必须事先单独编码，生成不会自动编码。preview显示最终启用的素材、参数、编码状态，不联网。",
+      "parameters": [
+        {
+          "name": "prompt",
+          "type": "string",
+          "required": true,
+          "description": "画面正文，英文tag为宜，不重复所选画风及人设卡"
+        },
+        {
+          "name": "request_id",
+          "type": "string",
+          "required": true,
+          "description": "本次唯一编号，字母数字下划线横杠，8至80字符；重复调用沿用"
+        },
+        {
+          "name": "overrides",
+          "type": "string",
+          "required": false,
+          "description": "单次覆盖JSON对象。字段先看nai_status；如style、negative、i2i_style、i2i_negative、width、height、strength、characters。省略字段继承默认；画风、负面空字符串表示不使用。图生图未显式传seed时省略种子；image_id指定本地底图，mode=img2img且transport=native。URL通道仅基础出图，不支持高级参数覆盖或图生图。需要步数、采样器控制和图片附件时单次覆盖transport为native；不得擅自修改默认配置。 参考字段：vibe_enabled、vibe_references:[{image_id,strength,information_extracted}]；precise_enabled、precise_references:[{image_id,type,strength,fidelity}]；type=character&style|character|style。显式false可单次关闭；省略则继承默认。先读nai_status。"
+        },
+        {
+          "name": "preview",
+          "type": "boolean",
+          "required": false,
+          "description": "true只预览参数，不发请求、不扣费"
+        }
+      ]
+    },
+    {
+      "name": "nai_result",
+      "description": "读取已有任务与图片链接，不再生图、不扣生图费用。公共版不附带私人测试图片。没有实际视觉输入时不要宣称看过。",
+      "parameters": [
+        {
+          "name": "id",
+          "type": "string",
+          "required": true,
+          "description": "nai_status 返回的已有任务编号"
+        }
+      ]
+    },
+    {
+      "name": "nai_upscale",
+      "description": "酸薄荷原生2倍放大，保留用户此前实测通过的实现；本轮未重复付费联调。读取本地PNG真实尺寸；结果另存、不改原图或默认参数。先preview免费检查，已获本次付费授权后confirmed=true。网络或结果读取异常不得换编号重发。",
+      "parameters": [
+        {
+          "name": "image_id",
+          "type": "string",
+          "required": true,
+          "description": "本地PNG素材编号；输入最多1048576像素"
+        },
+        {
+          "name": "request_id",
+          "type": "string",
+          "required": true,
+          "description": "8至80字符唯一编号，同次意图重试复用"
+        },
+        {
+          "name": "preview",
+          "type": "boolean",
+          "required": false,
+          "description": "true仅本地检查，无网络不扣费"
+        },
+        {
+          "name": "confirmed",
+          "type": "boolean",
+          "required": false,
+          "description": "用户明确同意本次放大可能扣费时才为true"
+        }
+      ]
+    },
+    {
+      "name": "nai_vibe_encode",
+      "description": "独立付费Vibe编码，不生成图片、不改默认。仅V4.5；预览免费离线，估算每张2 Anlas。按源图内容、模型、信息提取量复用缓存；改变强度无需重编码。未知结果不自动重发，沿用request_id。编码不返回Base64。",
+      "parameters": [
+        {
+          "name": "image_id",
+          "type": "string",
+          "required": true,
+          "description": "本地素材编号；从手机导入或nai_chat_image取得"
+        },
+        {
+          "name": "model",
+          "type": "string",
+          "required": true,
+          "description": "nai-diffusion-4-5-full或nai-diffusion-4-5-curated；必须和生成模型一致"
+        },
+        {
+          "name": "information_extracted",
+          "type": "number",
+          "required": true,
+          "description": "0.01至1；Full常用0.7，Curated常用1"
+        },
+        {
+          "name": "request_id",
+          "type": "string",
+          "required": true,
+          "description": "8至80字符唯一编号，同次意图必须复用"
+        },
+        {
+          "name": "preview",
+          "type": "boolean",
+          "required": false,
+          "description": "true仅本地检查，绝不联网扣费"
+        },
+        {
+          "name": "confirmed",
+          "type": "boolean",
+          "required": false,
+          "description": "本次付费编码已获授权时true"
+        }
+      ]
+    },
+    {
+      "name": "nai_vibe_result",
+      "description": "只读已有Vibe编码任务状态，不联网、不扣费、不返回编码、不重新提交。",
+      "parameters": [
+        {
+          "name": "id",
+          "type": "string",
+          "required": true,
+          "description": "编码任务request_id"
+        }
+      ]
+    }
+  ]
+}

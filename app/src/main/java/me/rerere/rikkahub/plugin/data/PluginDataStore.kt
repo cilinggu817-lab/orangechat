@@ -31,6 +31,9 @@ class PluginDataStore(
         prefs.edit().putString(key, value).apply()
     }
 
+    /** Paid-operation journals must reach disk before the network request starts. */
+    fun setDataDurable(key: String, value: String): Boolean = prefs.edit().putString(key, value).commit()
+
     /**
      * 读取数据
      */
