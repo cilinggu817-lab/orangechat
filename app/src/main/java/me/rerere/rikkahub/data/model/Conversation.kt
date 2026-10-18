@@ -41,7 +41,10 @@ data class Conversation(
     val sendCompressedSummary: Boolean = true,
     val compressionHistory: List<ConversationCompressionSnapshot> = emptyList(),
     @Transient
-    val newConversation: Boolean = false
+    val newConversation: Boolean = false,
+    // List projections and a failed initial load must never become replacement history.
+    @Transient
+    val messageNodesLoaded: Boolean = true,
 ) {
     val files: List<Uri>
         get() = messageNodes
@@ -79,6 +82,7 @@ data class Conversation(
             messageNodes.filterNot { it.id in activeCompressedMessageNodeIds }
 
     fun messagesForGeneration(messageRange: ClosedRange<Int>? = null): List<UIMessage> {
+        requireMessageNodesLoaded()
         check(compressedMessageNodeIds.isEmpty() || compressedSummary.isNotBlank()) {
             "压缩记录缺少摘要，请先撤销压缩再继续。"
         }
@@ -92,6 +96,10 @@ data class Conversation(
             messageNodes.slice(messageRange.start..messageRange.endInclusive)
         }
         return nodes.filterNot { it.id in activeCompressedMessageNodeIds }.map { it.currentMessage }
+    }
+
+    fun requireMessageNodesLoaded() {
+        check(messageNodesLoaded) { "消息尚未完整加载，请重新打开会话后操作。原有记录未被修改。" }
     }
 
     fun summaryForGeneration(): String? = if (sendCompressedSummary) {

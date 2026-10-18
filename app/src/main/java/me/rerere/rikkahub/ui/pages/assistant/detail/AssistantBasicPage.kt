@@ -96,7 +96,7 @@ fun AssistantBasicPage(id: String) {
             providers = providers,
             tags = tags,
             workspaces = workspaces,
-            onUpdate = { vm.update(it) },
+            onUpdate = { vm.update(assistant, it) },
             vm = vm
         )
     }

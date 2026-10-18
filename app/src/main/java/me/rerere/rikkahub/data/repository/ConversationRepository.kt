@@ -72,7 +72,7 @@ class ConversationRepository(
             .map { flow ->
                 flow.map { entity ->
                     // 列表视图不需要完整的 nodes，使用空列表
-                    conversationEntityToConversation(entity, emptyList())
+                    conversationEntityToConversation(entity, emptyList(), messageNodesLoaded = false)
                 }
             }
     }
@@ -187,7 +187,7 @@ class ConversationRepository(
             .searchConversations(titleKeyword)
             .map { flow ->
                 flow.map { entity ->
-                    conversationEntityToConversation(entity, emptyList())
+                    conversationEntityToConversation(entity, emptyList(), messageNodesLoaded = false)
                 }
             }
     }
@@ -210,7 +210,7 @@ class ConversationRepository(
             .searchConversationsOfAssistant(assistantId.toString(), titleKeyword)
             .map { flow ->
                 flow.map { entity ->
-                    conversationEntityToConversation(entity, emptyList())
+                    conversationEntityToConversation(entity, emptyList(), messageNodesLoaded = false)
                 }
             }
     }
@@ -234,9 +234,9 @@ class ConversationRepository(
             }
         }
 
-    suspend fun getConversationById(uuid: Uuid): Conversation? {
+    suspend fun getConversationById(uuid: Uuid): Conversation? = database.withTransaction {
         val entity = conversationDAO.getConversationById(uuid.toString())
-        return if (entity != null) {
+        if (entity != null) {
             val nodes = loadMessageNodes(entity.id)
             conversationEntityToConversation(entity, nodes)
         } else null
@@ -246,7 +246,17 @@ class ConversationRepository(
         return conversationDAO.existsById(uuid.toString())
     }
 
+    // Auxiliary generation never rewrites message nodes or recreates a deleted conversation.
+    suspend fun updateGeneratedTitle(id: Uuid, title: String): Boolean {
+        return conversationDAO.updateTitle(id.toString(), title) > 0
+    }
+
+    suspend fun updateGeneratedSuggestions(id: Uuid, suggestions: List<String>): Boolean {
+        return conversationDAO.updateSuggestions(id.toString(), JsonInstant.encodeToString(suggestions)) > 0
+    }
+
     suspend fun insertConversation(conversation: Conversation) {
+        conversation.requireMessageNodesLoaded()
         try {
             database.withTransaction {
                 conversationDAO.insert(
@@ -275,14 +285,34 @@ class ConversationRepository(
      *
      * FTS 索引也同步降级为只处理这批发生变化的 node，而不是整个对话重建。
      */
-    suspend fun updateConversation(conversation: Conversation) {
+    suspend fun updateConversation(conversation: Conversation, previous: Conversation? = null) {
+        conversation.requireMessageNodesLoaded()
+        previous?.requireMessageNodesLoaded()
+        require(previous == null || previous.id == conversation.id)
         try {
             database.withTransaction {
                 conversationDAO.update(
                     conversationToConversationEntity(conversation)
                 )
 
-                // 只查 id，不碰 messages 列，避免因个别行 blob 过大导致这里直接抛异常
+                if (previous != null) {
+                    // A session supplies its last committed snapshot: serialize only edited
+                    // nodes and express deletions explicitly, without reading old message bodies.
+                    val changes = conversationNodeChanges(previous, conversation)
+                    val entities = changes.upserts.map { (index, node) ->
+                        MessageNodeEntity(node.id.toString(), conversation.id.toString(), index,
+                            JsonInstant.encodeToString(node.messages), node.selectIndex)
+                    }
+                    if (changes.deletions.isNotEmpty()) messageNodeDAO.deleteByIds(changes.deletions.toList())
+                    if (entities.isNotEmpty()) messageNodeDAO.insertAll(entities)
+                    messageFtsManager.reindexNodes(
+                        conversation.id.toString(), conversation.title, conversation.updateAt,
+                        changes.changedIds, changes.upserts.map { it.second },
+                    )
+                    return@withTransaction
+                }
+
+                // Full snapshots from import/edit paths retain the conservative DB comparison.
                 val existingIds = messageNodeDAO.getNodeIdsOfConversation(conversation.id.toString()).toSet()
 
                 val newEntities = conversation.messageNodes.mapIndexed { index, node ->
@@ -418,12 +448,18 @@ class ConversationRepository(
 
     fun conversationEntityToConversation(
         conversationEntity: ConversationEntity,
-        messageNodes: List<MessageNode>
+        messageNodes: List<MessageNode>,
+        messageNodesLoaded: Boolean = true,
     ): Conversation {
         return Conversation(
             id = Uuid.parse(conversationEntity.id),
             title = conversationEntity.title,
-            messageNodes = messageNodes.filter { it.messages.isNotEmpty() },
+            messageNodes = messageNodes.also { nodes ->
+                check(nodes.all { it.messages.isNotEmpty() && it.selectIndex in it.messages.indices }) {
+                    "会话包含无法读取的消息，请先恢复记录。原有记录未被修改。"
+                }
+            },
+            messageNodesLoaded = messageNodesLoaded,
             createAt = Instant.ofEpochMilli(conversationEntity.createAt),
             updateAt = Instant.ofEpochMilli(conversationEntity.updateAt),
             assistantId = Uuid.parse(conversationEntity.assistantId),
@@ -444,16 +480,14 @@ class ConversationRepository(
             .getPinnedConversations()
             .map { flow ->
                 flow.map { entity ->
-                    conversationEntityToConversation(entity, emptyList())
+                    conversationEntityToConversation(entity, emptyList(), messageNodesLoaded = false)
                 }
             }
     }
 
-    suspend fun togglePinStatus(conversationId: Uuid) {
-        conversationDAO.updatePinStatus(
-            id = conversationId.toString(),
-            isPinned = !(getConversationById(conversationId)?.isPinned ?: false)
-        )
+    suspend fun togglePinStatus(conversationId: Uuid): Boolean? = database.withTransaction {
+        conversationDAO.togglePinStatus(conversationId.toString())
+        conversationDAO.getPinStatus(conversationId.toString())
     }
 
     /**
@@ -475,6 +509,7 @@ class ConversationRepository(
             createAt = Instant.ofEpochMilli(entity.createAt),
             updateAt = Instant.ofEpochMilli(entity.updateAt),
             messageNodes = emptyList(),
+            messageNodesLoaded = false,
             folderId = entity.folderId.ifEmpty { null }?.let { Uuid.parse(it) },
         )
     }
@@ -486,68 +521,14 @@ class ConversationRepository(
             .toSet()
 
         return database.withTransaction {
-            val nodes = mutableListOf<MessageNode>()
-
-            // 提前查出总行数，这样命中超大blob逐行重试时能精确控制范围，
-            // 不再依赖"空结果"来判断是否读到末尾——空结果既可能是被跳过的超大行，
-            // 也可能是真的没数据，两者无法区分，是之前会误判提前退出、丢消息的根因。
-            val totalCount = messageNodeDAO.getNodeCountOfConversation(conversationId)
-            if (totalCount == 0) return@withTransaction nodes
-
-            val pageSize = 64
-            var offset = 0
-            while (offset < totalCount) {
-                val page = try {
-                    messageNodeDAO.getNodesOfConversationPaged(conversationId, pageSize, offset)
-                } catch (e: SQLiteBlobTooBigException) {
-                    Log.w(
-                        TAG,
-                        "loadMessageNodes: blob too big in page, conversationId=$conversationId, " +
-                            "offset=$offset, retrying row by row to isolate the bad row",
-                        e
-                    )
-                    // 整页命中超大blob时，逐行重试，精确定位并只跳过那一行，
-                    // 避免同一页里其他正常的消息被连坐丢弃
-                    // （这是之前 UI 显示数 < 数据库实际数的根因）
-                    val recovered = mutableListOf<MessageNodeEntity>()
-                    val pageEnd = minOf(offset + pageSize, totalCount)
-                    for (rowOffset in offset until pageEnd) {
-                        try {
-                            val row = messageNodeDAO.getNodesOfConversationPaged(conversationId, 1, rowOffset)
-                            recovered.addAll(row)
-                        } catch (rowError: SQLiteBlobTooBigException) {
-                            Log.e(
-                                TAG,
-                                "loadMessageNodes: skipping single oversized row, " +
-                                    "conversationId=$conversationId, offset=$rowOffset",
-                                rowError
-                            )
-                        }
-                    }
-                    recovered
-                } catch (e: IllegalStateException) {
-                    Log.e(TAG, "loadMessageNodes failed, conversationId=$conversationId, offset=$offset", e)
-                    offset += pageSize
-                    continue
+            messageNodeDAO.loadCompleteNodes(conversationId).map { entity ->
+                val messages = JsonInstant.decodeFromString<List<UIMessage>>(entity.messages)
+                check(messages.isNotEmpty() && entity.selectIndex in messages.indices) {
+                    "会话包含无法读取的消息，请先恢复记录。原有记录未被修改。"
                 }
-
-                // 注意：不能用 page.isEmpty() 来判断是否读完——逐行重试时如果整页全是超大行，
-                // recovered 会是空的，但后面可能还有正常数据。循环终止完全由 offset < totalCount 控制。
-                page.forEach { entity ->
-                    val messages = JsonInstant.decodeFromString<List<UIMessage>>(entity.messages)
-                    val nodeId = Uuid.parse(entity.id)
-                    nodes.add(
-                        MessageNode(
-                            id = nodeId,
-                            messages = messages,
-                            selectIndex = entity.selectIndex,
-                            isFavorite = favoriteNodeIds.contains(nodeId)
-                        )
-                    )
-                }
-                offset += pageSize
+                val nodeId = Uuid.parse(entity.id)
+                MessageNode(nodeId, messages, entity.selectIndex, favoriteNodeIds.contains(nodeId))
             }
-            nodes
         }
     }
 

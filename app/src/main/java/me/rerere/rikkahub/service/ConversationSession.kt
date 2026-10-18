@@ -18,8 +18,10 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import me.rerere.rikkahub.data.model.Conversation
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.uuid.Uuid
 
 private const val TAG = "ConversationSession"
@@ -29,10 +31,42 @@ class ConversationSession(
     val id: Uuid,
     initial: Conversation,
     private val scope: CoroutineScope,
+    private val debugLog: (String) -> Unit = { message ->
+        Log.d(TAG, message)
+        Unit
+    },
     private val onIdle: (Uuid) -> Unit,
 ) {
     // 会话状态
     val state = MutableStateFlow(initial)
+    private val deleted = AtomicBoolean(false)
+    val isDeleted: Boolean get() = deleted.get()
+    internal var persistedConversation: Conversation? = null
+
+    internal fun requireActive() {
+        if (isDeleted) throw CancellationException("Conversation was deleted")
+    }
+
+    internal fun markDeleted(): List<Job> {
+        deleted.set(true)
+        return cancelJobs()
+    }
+
+    internal fun reopenAfterFailedDelete() {
+        check(!isGenerating)
+        deleted.set(false)
+    }
+
+    internal suspend fun deleteAndAwait(persistDeletion: suspend () -> Unit) = withContext(NonCancellable) {
+        val jobs = markDeleted()
+        jobs.forEach { it.join() }
+        saveMutex.withLock {
+            persistDeletion()
+            persistedConversation = null
+            state.value = state.value.copy(messageNodes = emptyList(), chatSuggestions = emptyList())
+            cleanup()
+        }
+    }
 
     // 原子引用计数
     private val refCount = AtomicInteger(0)
@@ -60,16 +94,34 @@ class ConversationSession(
      */
     val saveMutex = Mutex()
 
+    /** Keep this session alive while serializing database loads and state/metadata saves. */
+    internal suspend fun <T> withStateLock(block: suspend () -> T): T = withRefSuspend {
+        saveMutex.withLock { requireActive(); block() }
+    }
+
+    /** Persist only metadata, then patch the latest state without replacing in-flight messages. */
+    internal suspend fun saveGeneratedTitle(title: String, persist: suspend () -> Boolean) {
+        withStateLock {
+            if (persist()) state.value = state.value.copy(title = title)
+        }
+    }
+
+    internal suspend fun saveGeneratedSuggestions(suggestions: List<String>, persist: suspend () -> Boolean) {
+        withStateLock {
+            if (persist()) state.value = state.value.copy(chatSuggestions = suggestions)
+        }
+    }
+
     // 空闲检查任务
     private var idleCheckJob: Job? = null
 
     fun acquire(): Int = refCount.incrementAndGet().also {
         cancelIdleCheck()
-        Log.d(TAG, "acquire $id (refs=$it)")
+        debugLog("acquire $id (refs=$it)")
     }
 
     fun release(): Int = refCount.decrementAndGet().also {
-        Log.d(TAG, "release $id (refs=$it)")
+        debugLog("release $id (refs=$it)")
         if (it <= 0) scheduleIdleCheck()
     }
 
@@ -95,6 +147,7 @@ class ConversationSession(
 
     @Synchronized
     fun setJob(job: Job?, cancelPrevious: Boolean = true) {
+        if (isDeleted) { job?.cancel(); return }
         val previous = _generationJob.value
         _generationJob.value = job
         if (cancelPrevious) previous?.cancel()
@@ -134,7 +187,7 @@ class ConversationSession(
     private val claimLock = Any()
 
     fun tryClaimGeneration(newJob: Job): Boolean = synchronized(claimLock) {
-        if (isGenerating) return@synchronized false
+        if (isDeleted || isGenerating) return@synchronized false
         setJob(newJob)
         true
     }

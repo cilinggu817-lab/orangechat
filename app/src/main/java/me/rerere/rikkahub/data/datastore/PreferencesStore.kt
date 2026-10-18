@@ -472,18 +472,28 @@ class SettingsStore(
             return
         }
         updateMutex.withLock {
-            publishAndPersist(settings)
+            publishAndPersist(settings, settingsFlowRaw.first())
         }
     }
 
     /** Apply a change to the latest snapshot and persist it atomically. */
     suspend fun update(fn: (Settings) -> Settings) {
         updateMutex.withLock {
-            publishAndPersist(fn(settingsFlow.value))
+            val current = settingsFlowRaw.first()
+            publishAndPersist(fn(current), current)
         }
     }
 
-    private suspend fun publishAndPersist(settings: Settings) {
+    /** Merge an editor's changes under the same lock as the write, preserving newer unrelated fields. */
+    suspend fun updateFrom(previous: Settings, desired: Settings) {
+        if (previous.init || desired.init) {
+            Log.w(TAG, "Cannot update from dummy settings")
+            return
+        }
+        update { current -> current.withSettingsEdit(previous, desired) }
+    }
+
+    private suspend fun publishAndPersist(settings: Settings, previous: Settings) {
         if(settings.init) {
             Log.w(TAG, "Cannot update dummy settings")
             return
@@ -491,7 +501,6 @@ class SettingsStore(
         pendingWrites.incrementAndGet()
         settingsFlow.value = settings
         try {
-            val previous = settingsFlowRaw.first()
             withContext(Dispatchers.IO) {
                 persistSettings(settings, previous)
             }

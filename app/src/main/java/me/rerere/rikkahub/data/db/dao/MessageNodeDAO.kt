@@ -53,6 +53,12 @@ interface MessageNodeDAO {
         offset: Int
     ): List<MessageNodeEntity>
 
+    @Query("SELECT id, conversation_id AS conversationId, node_index AS nodeIndex, select_index AS selectIndex, length(messages) AS messageLength FROM message_node WHERE conversation_id = :conversationId ORDER BY node_index ASC LIMIT :limit OFFSET :offset")
+    suspend fun getNodeHeaders(conversationId: String, limit: Int, offset: Int): List<MessageNodeHeader>
+
+    @Query("SELECT substr(messages, :start, :length) FROM message_node WHERE id = :id")
+    suspend fun getMessageSlice(id: String, start: Int, length: Int): String?
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertAll(nodes: List<MessageNodeEntity>)
 
@@ -82,6 +88,14 @@ interface MessageNodeDAO {
     @RawQuery
     suspend fun getMessageCountPerDayRaw(query: SupportSQLiteQuery): List<MessageDayCount>
 }
+
+data class MessageNodeHeader(
+    val id: String,
+    val conversationId: String,
+    val nodeIndex: Int,
+    val selectIndex: Int,
+    val messageLength: Int,
+)
 
 data class MessageTokenStats(
     val totalMessages: Int = 0,
