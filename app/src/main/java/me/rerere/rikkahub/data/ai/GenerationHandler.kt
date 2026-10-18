@@ -88,6 +88,7 @@ class GenerationHandler(
     private val conversationRepo: ConversationRepository,
     private val aiLoggingManager: AILoggingManager,
     private val memoryBankService: MemoryBankService,
+    private val filesManager: me.rerere.rikkahub.data.files.FilesManager,
 ) {
     fun generateText(
         settings: Settings,
@@ -458,7 +459,7 @@ class GenerationHandler(
  
             }
             addAll(buildConversationRequestMessages(system, messages, assistant.contextMessageSize, conversationContextSummary))
-        }.transforms(
+        }.let { filesManager.validAttachments(it, forSending = true) }.transforms(
             transformers = transformers,
             context = context,
             model = model,
@@ -466,25 +467,15 @@ class GenerationHandler(
             settings = settings,
             processingStatus = processingStatus,
             workspaceCwd = workspaceCwd,
-        )
+        ).let { filesManager.validAttachments(it, forSending = true) }.filterNot { it.parts.isEmpty() }
  
         var messages: List<UIMessage> = messages
-        val params = TextGenerationParams(
+        val params = buildAssistantGenerationParams(
+            assistant = assistant,
             model = model,
-            conversationId = if (provider is ProviderSetting.Codex) conversationId else null,
-            temperature = assistant.temperature,
-            topP = assistant.topP,
-            maxTokens = assistant.maxTokens,
+            provider = provider,
+            conversationId = conversationId,
             tools = tools,
-            reasoningLevel = assistant.reasoningLevel,
-            customHeaders = buildList {
-                addAll(assistant.customHeaders)
-                addAll(model.customHeaders)
-            },
-            customBody = buildList {
-                addAll(assistant.customBodies)
-                addAll(model.customBodies)
-            }
         )
         if (stream) {
             aiLoggingManager.addLog(

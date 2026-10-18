@@ -7,6 +7,9 @@ import me.rerere.ai.ui.canResumeToolExecution
 import me.rerere.rikkahub.data.ai.hasDurableToolEvidence
 import me.rerere.rikkahub.data.ai.recoverToolHistoryForRequest
 import me.rerere.rikkahub.data.model.Conversation
+import me.rerere.rikkahub.data.model.MessageNode
+import me.rerere.rikkahub.data.model.toMessageNode
+import me.rerere.rikkahub.data.repository.ConversationNodeChanges
 import kotlin.uuid.Uuid
 
 /** Recover selected tool history before applying the legacy incomplete-message cleanup. */
@@ -35,21 +38,80 @@ internal fun Conversation.withRecoveredToolHistory(json: Json): Conversation {
 internal fun Conversation.withGenerationMessages(
     messages: List<UIMessage>,
     targets: Map<Uuid, Uuid> = emptyMap(),
-): Conversation {
-    val latest = messageNodes.flatMap { it.messages }.associateBy { it.id }
-    val merged = messages.map { incoming ->
-        val evidence = latest[incoming.id]?.getTools()?.filter { it.hasDurableToolEvidence }.orEmpty()
-        if (evidence.isEmpty()) incoming else {
-            val incomingIds = incoming.getTools().map { it.toolCallId }.toSet()
-            incoming.copy(parts = incoming.parts.map { part ->
-                if (part !is UIMessagePart.Tool) part else {
-                    val saved = evidence.find { it.toolCallId == part.toolCallId }
-                    if (saved != null && (!part.hasDurableToolEvidence || (saved.isExecuted && !part.isExecuted))) {
-                        saved
-                    } else part
-                }
-            } + evidence.filter { it.toolCallId !in incomingIds })
+): Conversation = generationMessageMutation(messages, targets).conversation
+
+/** Only append/replace operations can create this bounded persistence plan. */
+internal class ConversationMessageMutation(
+    val previous: Conversation,
+    val conversation: Conversation,
+    val changes: ConversationNodeChanges,
+) {
+    fun removedFileCandidates() = previous.copy(messageNodes = changes.upserts.mapNotNull {
+        previous.messageNodes.getOrNull(it.first)
+    }).files.toSet() - conversation.copy(messageNodes = changes.upserts.map { it.second }).files.toSet()
+
+    /** An unchanged node or an unselected branch may still own the same nested tool-output file. */
+    fun unreferencedFiles() = removedFileCandidates().let { candidates ->
+        if (candidates.isEmpty()) emptyList() else {
+            val retained = conversation.files.toSet()
+            candidates.filterNot { it in retained }
         }
     }
-    return updateCurrentMessages(merged, targets)
+}
+
+/** Index identities once, instead of searching the complete history for every returned message. */
+internal fun Conversation.generationMessageMutation(
+    messages: List<UIMessage>,
+    targets: Map<Uuid, Uuid> = emptyMap(),
+): ConversationMessageMutation {
+    requireMessageNodesLoaded()
+    val nodes = messageNodes.toMutableList()
+    val nodeIndices = HashMap<Uuid, Int>()
+    val messageIndices = HashMap<Uuid, Pair<Int, Int>>()
+    nodes.forEachIndexed { index, node ->
+        nodeIndices.putIfAbsent(node.id, index)
+        node.messages.forEachIndexed { alternative, message -> messageIndices.putIfAbsent(message.id, index to alternative) }
+    }
+    val archived = activeCompressedMessageNodeIds
+    val upserts = linkedMapOf<Int, MessageNode>()
+    messages.forEach { incoming ->
+        val location = messageIndices[incoming.id]
+        val index = location?.first ?: targets[incoming.id]?.let(nodeIndices::get)
+        if (index != null && nodes[index].id in archived) return@forEach
+        if (index == null) {
+            val node = incoming.toMessageNode()
+            val appended = nodes.size
+            nodes.add(node)
+            nodeIndices[node.id] = appended
+            messageIndices[incoming.id] = appended to 0
+            upserts[appended] = node
+        } else {
+            val node = nodes[index]
+            val alternative = location?.second
+            val saved = alternative?.let { node.messages[it] }
+            val merged = incoming.preservingToolEvidence(saved)
+            if (saved == merged) return@forEach
+            val changed = if (alternative != null) node.copy(
+                messages = node.messages.toMutableList().also { it[alternative] = merged },
+            ) else node.copy(messages = node.messages + merged, selectIndex = node.messages.size)
+            nodes[index] = changed
+            messageIndices[incoming.id] = index to (alternative ?: node.messages.size)
+            upserts[index] = changed
+        }
+    }
+    val after = if (upserts.isEmpty()) this else copy(messageNodes = nodes)
+    return ConversationMessageMutation(this, after, ConversationNodeChanges(upserts.map { it.key to it.value }, emptySet()))
+}
+
+private fun UIMessage.preservingToolEvidence(saved: UIMessage?): UIMessage {
+    if (saved === this) return this
+    val evidence = saved?.getTools()?.filter { it.hasDurableToolEvidence }.orEmpty().associateBy { it.toolCallId }
+    if (evidence.isEmpty()) return this
+    val incomingIds = getTools().map { it.toolCallId }.toSet()
+    return copy(parts = parts.map { part ->
+        if (part !is UIMessagePart.Tool) part else {
+            val durable = evidence[part.toolCallId]
+            if (durable != null && (!part.hasDurableToolEvidence || (durable.isExecuted && !part.isExecuted))) durable else part
+        }
+    } + evidence.values.filter { it.toolCallId !in incomingIds })
 }

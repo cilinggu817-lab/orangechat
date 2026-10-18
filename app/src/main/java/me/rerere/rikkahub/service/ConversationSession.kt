@@ -42,6 +42,7 @@ class ConversationSession(
     private val deleted = AtomicBoolean(false)
     val isDeleted: Boolean get() = deleted.get()
     internal var persistedConversation: Conversation? = null
+    internal val messageJournal = ConversationMessageJournal()
 
     internal fun requireActive() {
         if (isDeleted) throw CancellationException("Conversation was deleted")
@@ -63,6 +64,7 @@ class ConversationSession(
         saveMutex.withLock {
             persistDeletion()
             persistedConversation = null
+            messageJournal.invalidate()
             state.value = state.value.copy(messageNodes = emptyList(), chatSuggestions = emptyList())
             cleanup()
         }

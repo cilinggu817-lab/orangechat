@@ -25,7 +25,7 @@ import androidx.compose.foundation.shape.CircleShape
 import me.rerere.rikkahub.ui.theme.LargeFlexibleTopAppBar
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Slider
+import me.rerere.rikkahub.ui.components.ui.CommitSlider
 import androidx.compose.material3.Text
 import androidx.compose.material3.Switch
 import androidx.compose.material3.TextButton
@@ -56,12 +56,12 @@ import org.koin.androidx.compose.koinViewModel
 @Composable
 fun SettingDisplayIllustrationPage(vm: SettingVM = koinViewModel()) {
     val settings by vm.settings.collectAsStateWithLifecycle()
-    var displaySetting by remember(settings) { mutableStateOf(settings.displaySetting) }
+    var displaySetting by remember(settings.displaySetting) { mutableStateOf(settings.displaySetting) }
     val context = LocalContext.current
 
     fun updateDisplaySetting(setting: DisplaySetting) {
         displaySetting = setting
-        vm.updateSettings(settings.copy(displaySetting = setting))
+        vm.updateDisplaySetting(settings.displaySetting, setting)
     }
 
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
@@ -331,15 +331,18 @@ fun SettingDisplayIllustrationPage(vm: SettingVM = koinViewModel()) {
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                             ) {
-                                Slider(
+                                CommitSlider(
                                     value = displaySetting.bubbleCornerRadius,
+                                    onValuePreview = { displaySetting = displaySetting.copy(bubbleCornerRadius = it) },
                                     onValueChange = {
                                         updateDisplaySetting(displaySetting.copy(bubbleCornerRadius = it))
                                     },
                                     valueRange = 0f..32f,
                                     modifier = Modifier.weight(1f)
-                                )
-                                Text(text = "${displaySetting.bubbleCornerRadius.toInt()}")
+                                ) { draft, slider ->
+                                    slider()
+                                    Text(text = "${draft.toInt()}")
+                                }
                             }
                         }
                     )
@@ -431,13 +434,16 @@ fun SettingDisplayIllustrationPage(vm: SettingVM = koinViewModel()) {
                                 headlineContent = { Text("偏移 X") },
                                 supportingContent = {
                                     Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                        Slider(
+                                        CommitSlider(
                                             value = displaySetting.userAvatarFrameOffsetX,
+                                            onValuePreview = { displaySetting = displaySetting.copy(userAvatarFrameOffsetX = it) },
                                             onValueChange = { updateDisplaySetting(displaySetting.copy(userAvatarFrameOffsetX = it)) },
                                             valueRange = -100f..100f,
                                             modifier = Modifier.weight(1f)
-                                        )
-                                        Text("${displaySetting.userAvatarFrameOffsetX.toInt()}")
+                                        ) { draft, slider ->
+                                            slider()
+                                            Text("${draft.toInt()}")
+                                        }
                                     }
                                 },
                             )
@@ -446,13 +452,16 @@ fun SettingDisplayIllustrationPage(vm: SettingVM = koinViewModel()) {
                                 headlineContent = { Text("偏移 Y") },
                                 supportingContent = {
                                     Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                        Slider(
+                                        CommitSlider(
                                             value = displaySetting.userAvatarFrameOffsetY,
+                                            onValuePreview = { displaySetting = displaySetting.copy(userAvatarFrameOffsetY = it) },
                                             onValueChange = { updateDisplaySetting(displaySetting.copy(userAvatarFrameOffsetY = it)) },
                                             valueRange = -100f..100f,
                                             modifier = Modifier.weight(1f)
-                                        )
-                                        Text("${displaySetting.userAvatarFrameOffsetY.toInt()}")
+                                        ) { draft, slider ->
+                                            slider()
+                                            Text("${draft.toInt()}")
+                                        }
                                     }
                                 },
                             )
@@ -461,13 +470,16 @@ fun SettingDisplayIllustrationPage(vm: SettingVM = koinViewModel()) {
                                 headlineContent = { Text("缩放") },
                                 supportingContent = {
                                     Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                        Slider(
+                                        CommitSlider(
                                             value = displaySetting.userAvatarFrameScale,
+                                            onValuePreview = { displaySetting = displaySetting.copy(userAvatarFrameScale = it) },
                                             onValueChange = { updateDisplaySetting(displaySetting.copy(userAvatarFrameScale = it)) },
                                             valueRange = 0.5f..2f,
                                             modifier = Modifier.weight(1f)
-                                        )
-                                        Text("${(displaySetting.userAvatarFrameScale * 100).toInt()}%")
+                                        ) { draft, slider ->
+                                            slider()
+                                            Text("${(draft * 100).toInt()}%")
+                                        }
                                     }
                                 },
                             )
@@ -541,13 +553,16 @@ fun SettingDisplayIllustrationPage(vm: SettingVM = koinViewModel()) {
                                 headlineContent = { Text("偏移 X") },
                                 supportingContent = {
                                     Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                        Slider(
+                                        CommitSlider(
                                             value = displaySetting.aiAvatarFrameOffsetX,
+                                            onValuePreview = { displaySetting = displaySetting.copy(aiAvatarFrameOffsetX = it) },
                                             onValueChange = { updateDisplaySetting(displaySetting.copy(aiAvatarFrameOffsetX = it)) },
                                             valueRange = -100f..100f,
                                             modifier = Modifier.weight(1f)
-                                        )
-                                        Text("${displaySetting.aiAvatarFrameOffsetX.toInt()}")
+                                        ) { draft, slider ->
+                                            slider()
+                                            Text("${draft.toInt()}")
+                                        }
                                     }
                                 },
                             )
@@ -556,13 +571,16 @@ fun SettingDisplayIllustrationPage(vm: SettingVM = koinViewModel()) {
                                 headlineContent = { Text("偏移 Y") },
                                 supportingContent = {
                                     Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                        Slider(
+                                        CommitSlider(
                                             value = displaySetting.aiAvatarFrameOffsetY,
+                                            onValuePreview = { displaySetting = displaySetting.copy(aiAvatarFrameOffsetY = it) },
                                             onValueChange = { updateDisplaySetting(displaySetting.copy(aiAvatarFrameOffsetY = it)) },
                                             valueRange = -100f..100f,
                                             modifier = Modifier.weight(1f)
-                                        )
-                                        Text("${displaySetting.aiAvatarFrameOffsetY.toInt()}")
+                                        ) { draft, slider ->
+                                            slider()
+                                            Text("${draft.toInt()}")
+                                        }
                                     }
                                 },
                             )
@@ -571,13 +589,16 @@ fun SettingDisplayIllustrationPage(vm: SettingVM = koinViewModel()) {
                                 headlineContent = { Text("缩放") },
                                 supportingContent = {
                                     Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                        Slider(
+                                        CommitSlider(
                                             value = displaySetting.aiAvatarFrameScale,
+                                            onValuePreview = { displaySetting = displaySetting.copy(aiAvatarFrameScale = it) },
                                             onValueChange = { updateDisplaySetting(displaySetting.copy(aiAvatarFrameScale = it)) },
                                             valueRange = 0.5f..2f,
                                             modifier = Modifier.weight(1f)
-                                        )
-                                        Text("${(displaySetting.aiAvatarFrameScale * 100).toInt()}%")
+                                        ) { draft, slider ->
+                                            slider()
+                                            Text("${(draft * 100).toInt()}%")
+                                        }
                                     }
                                 },
                             )

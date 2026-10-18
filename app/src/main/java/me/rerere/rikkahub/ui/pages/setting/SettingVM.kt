@@ -26,6 +26,14 @@ class SettingVM(
     ViewModel() {
     val settings: StateFlow<Settings> = settingsStore.settingsFlow
 
+    fun updateDisplaySetting(
+        previous: me.rerere.rikkahub.data.datastore.DisplaySetting,
+        desired: me.rerere.rikkahub.data.datastore.DisplaySetting,
+    ) {
+        val baseline = settings.value.copy(displaySetting = previous)
+        updateSettings(baseline, baseline.copy(displaySetting = desired))
+    }
+
     fun updateSettings(settings: Settings) {
         updateSettings(this.settings.value, settings)
     }

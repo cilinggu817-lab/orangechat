@@ -37,6 +37,7 @@ import me.rerere.ai.provider.TextGenerationParams
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
 import me.rerere.rikkahub.data.ai.GenerationToolApproval
+import me.rerere.rikkahub.data.ai.buildAssistantGenerationParams
 import me.rerere.rikkahub.data.ai.executeGenerationToolBatch
 import me.rerere.rikkahub.data.ai.executionCheckpointState
 import me.rerere.rikkahub.data.ai.hasDurableToolEvidence
@@ -69,6 +70,7 @@ import me.rerere.rikkahub.data.model.Conversation
 import me.rerere.rikkahub.data.model.toMessageNode
 import me.rerere.rikkahub.data.repository.ConversationRepository
 import me.rerere.rikkahub.service.ChatService
+import me.rerere.rikkahub.service.generationMessageMutation
 import me.rerere.rikkahub.utils.sendNotification
 import kotlin.uuid.Uuid
 import org.koin.core.component.KoinComponent
@@ -311,6 +313,7 @@ class ProactiveMessageReceiver : BroadcastReceiver() {
 class ProactiveMessageTriggerService : android.app.Service(), KoinComponent {
     private val settingsStore: SettingsStore by inject()
     private val conversationRepository: ConversationRepository by inject()
+    private val filesManager: me.rerere.rikkahub.data.files.FilesManager by inject()
     private val memoryRepository: MemoryRepository by inject()
     private val providerManager: ProviderManager by inject()
     private val json: Json by inject()
@@ -674,12 +677,12 @@ class ProactiveMessageTriggerService : android.app.Service(), KoinComponent {
 
                 // Keep the wake-up user turn request-only. Claude/Gemini cannot start from
                 // an assistant prefill; tool continuations below retain their result pairing.
-                val messages = beginProactiveRequest(
+                val messages = filesManager.validAttachments(beginProactiveRequest(
                     me.rerere.rikkahub.data.ai.buildConversationRequestMessages(
                         systemPrompt, historyMessages, 0, activeConversation.summaryForGeneration(),
                     ),
                     context = extraContext.orEmpty(),
-                )
+                ), forSending = true).filterNot { it.parts.isEmpty() }
                 trace.messages("request", messages)
 
                 val providerImpl = providerManager.getProviderByType(providerSetting)
@@ -687,22 +690,12 @@ class ProactiveMessageTriggerService : android.app.Service(), KoinComponent {
                 // 主动消息场景：支持工具调用，但限制最大步数
                 // temperature 不强制默认 0.8f，保持与 GenerationHandler 一致（assistant.temperature 为 null 时不传），
                 // 否则对智谱 GLM 等 thinking 模型会同时下发 temperature + thinking，触发 "Invalid request body" 400。
-                val params = TextGenerationParams(
+                val params = buildAssistantGenerationParams(
+                    assistant = assistant,
                     model = model,
-                    conversationId = if (providerSetting is ProviderSetting.Codex) conversationId.toString() else null,
-                    temperature = assistant.temperature,
-                    topP = assistant.topP,
-                    maxTokens = assistant.maxTokens,
+                    provider = providerSetting,
+                    conversationId = conversationId.toString(),
                     tools = tools,
-                    reasoningLevel = assistant.reasoningLevel,
-                    customHeaders = buildList {
-                        addAll(assistant.customHeaders)
-                        addAll(model.customHeaders)
-                    },
-                    customBody = buildList {
-                        addAll(assistant.customBodies)
-                        addAll(model.customBodies)
-                    }
                 )
 
                 Log.d(TAG, "Calling AI API for proactive message with ${historyMessages.size} history messages, ${tools.size} tools (reasoning=${assistant.reasoningLevel}, model=${model.modelId}, provider=${providerSetting::class.simpleName})...")
@@ -749,7 +742,9 @@ class ProactiveMessageTriggerService : android.app.Service(), KoinComponent {
                                 "或者真正想说的一句话；不要再次解释过程。"
                         )),
                     )
-                    var finalized = mergeAdjacentSameRoleMessages(finalMessages + finalizePrompt)
+                    var finalized = filesManager.validAttachments(
+                        mergeAdjacentSameRoleMessages(finalMessages + finalizePrompt), forSending = true,
+                    ).filterNot { it.parts.isEmpty() }
                     providerImpl.streamText(
                         providerSetting = providerSetting,
                         messages = finalized,
@@ -1399,25 +1394,9 @@ class ProactiveMessageTriggerService : android.app.Service(), KoinComponent {
                         "executed=${aiMessage.getTools().count { it.isExecuted }} existingNode=${existingNodeIndex >= 0}",
                 )
             }
-            val updated = if (existingNodeIndex >= 0) {
-                // 已存在该 id 的 node：保留 node id，只更新其 messages
-                val oldNode = conv.messageNodes[existingNodeIndex]
-                val updatedNode = oldNode.copy(
-                    messages = oldNode.messages.map {
-                        if (it.id == aiMessage.id) committedMessage else it
-                    }
-                )
-                conv.copy(
-                    messageNodes = conv.messageNodes.toMutableList().apply {
-                        this[existingNodeIndex] = updatedNode
-                    }
-                )
-            } else {
-                // 本次生成的 node 还没有：追加（首次调用时才创建新 node）
-                conv.copy(messageNodes = conv.messageNodes + committedMessage.toMessageNode())
-            }
-            chatService.updateConversation(conversationId, updated)
-            chatService.saveConversationLocked(conversationId, updated)
+            val mutation = conv.generationMessageMutation(listOf(committedMessage))
+            chatService.applyMessageMutationLocked(conversationId, mutation)
+            chatService.saveConversationLocked(conversationId, session.state.value)
         }
     }
 
@@ -1535,9 +1514,9 @@ class ProactiveMessageTriggerService : android.app.Service(), KoinComponent {
             // persisted assistant and transfer ownership back to the old message id.
             // Recover an interrupted historical call in the provider-only copy. This run must
             // not claim or rewrite historical nodes just to close an incomplete tool protocol.
-            val requestMessages = mergeAdjacentSameRoleMessages(prepareProactiveToolContinuation(
+            val requestMessages = filesManager.validAttachments(mergeAdjacentSameRoleMessages(prepareProactiveToolContinuation(
                 messages.toList().recoverToolHistoryForRequest(json, allowLastMessageResume = false),
-            ))
+            )), forSending = true).filterNot { it.parts.isEmpty() }
             // Tool continuations still use local ASSISTANT records that the providers expand
             // into call/result pairs. Never reuse their ids for the next assistant output.
             var streamMessages = beginProactiveAssistantTurn(messages.toList(), model.id)

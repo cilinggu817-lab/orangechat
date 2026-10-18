@@ -14,6 +14,7 @@ import androidx.paging.PagingData
 import androidx.paging.PagingSource
 import androidx.paging.map
 import androidx.room.withTransaction
+import androidx.core.net.toUri
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
@@ -29,6 +30,9 @@ import me.rerere.rikkahub.data.db.dao.MessageNodeDAO
 import me.rerere.rikkahub.data.db.entity.ConversationEntity
 import me.rerere.rikkahub.data.db.entity.MessageNodeEntity
 import me.rerere.rikkahub.data.files.FilesManager
+import me.rerere.rikkahub.data.files.attachmentUrls
+import me.rerere.rikkahub.data.files.localAttachmentFile
+import me.rerere.rikkahub.data.datastore.SettingsStore
 import me.rerere.rikkahub.data.model.Conversation
 import me.rerere.rikkahub.data.model.MessageNode
 import me.rerere.rikkahub.utils.JsonInstant
@@ -44,6 +48,8 @@ class ConversationRepository(
     private val database: AppDatabase,
     private val filesManager: FilesManager,
     private val messageFtsManager: MessageFtsManager,
+    // Tests that exercise storage alone may omit settings; cleanup then conservatively keeps files.
+    private val settingsStore: SettingsStore? = null,
 ) {
     companion object {
         private const val PAGE_SIZE = 20
@@ -255,16 +261,19 @@ class ConversationRepository(
         return conversationDAO.updateSuggestions(id.toString(), JsonInstant.encodeToString(suggestions)) > 0
     }
 
-    suspend fun insertConversation(conversation: Conversation) {
+    suspend fun insertConversation(conversation: Conversation): Conversation = withContext(Dispatchers.IO) {
         conversation.requireMessageNodesLoaded()
         try {
-            database.withTransaction {
+            val saved = database.withTransaction {
+                val conversation = withoutDeletedAttachments(conversation)
                 conversationDAO.insert(
                     conversationToConversationEntity(conversation)
                 )
                 saveMessageNodes(conversation.id.toString(), conversation.messageNodes)
+                conversation
             }
-            messageFtsManager.indexConversation(conversation)
+            messageFtsManager.indexConversation(saved)
+            saved
         } catch (e: Exception) {
             Log.e(TAG, "insertConversation failed, conversationId=${conversation.id}", e)
             throw e
@@ -285,12 +294,14 @@ class ConversationRepository(
      *
      * FTS 索引也同步降级为只处理这批发生变化的 node，而不是整个对话重建。
      */
-    suspend fun updateConversation(conversation: Conversation, previous: Conversation? = null) {
+    suspend fun updateConversation(conversation: Conversation, previous: Conversation? = null): Conversation = withContext(Dispatchers.IO) {
         conversation.requireMessageNodesLoaded()
         previous?.requireMessageNodesLoaded()
         require(previous == null || previous.id == conversation.id)
+        val discardedFiles = mutableSetOf<String>()
         try {
-            database.withTransaction {
+            val saved = database.withTransaction {
+                val conversation = withoutDeletedAttachments(conversation)
                 conversationDAO.update(
                     conversationToConversationEntity(conversation)
                 )
@@ -299,17 +310,22 @@ class ConversationRepository(
                     // A session supplies its last committed snapshot: serialize only edited
                     // nodes and express deletions explicitly, without reading old message bodies.
                     val changes = conversationNodeChanges(previous, conversation)
+                    val oldById = previous.messageNodes.associateBy { it.id.toString() }
+                    val retained = attachmentUrls(changes.upserts.flatMap { it.second.messages })
+                    (changes.changedIds.mapNotNull { oldById[it] }).forEach { old ->
+                        discardedFiles += attachmentUrls(old.messages) - retained
+                    }
                     val entities = changes.upserts.map { (index, node) ->
                         MessageNodeEntity(node.id.toString(), conversation.id.toString(), index,
                             JsonInstant.encodeToString(node.messages), node.selectIndex)
                     }
-                    if (changes.deletions.isNotEmpty()) messageNodeDAO.deleteByIds(changes.deletions.toList())
+                    changes.deletions.toList().chunked(200).forEach { messageNodeDAO.deleteByIds(it) }
                     if (entities.isNotEmpty()) messageNodeDAO.insertAll(entities)
                     messageFtsManager.reindexNodes(
                         conversation.id.toString(), conversation.title, conversation.updateAt,
                         changes.changedIds, changes.upserts.map { it.second },
                     )
-                    return@withTransaction
+                    return@withTransaction conversation
                 }
 
                 // Full snapshots from import/edit paths retain the conservative DB comparison.
@@ -332,7 +348,7 @@ class ConversationRepository(
                     emptyMap()
                 } else {
                     try {
-                        messageNodeDAO.getNodesByIds(idsNeedCompare).associateBy { it.id }
+                        idsNeedCompare.chunked(200).flatMap { messageNodeDAO.getNodesByIds(it) }.associateBy { it.id }
                     } catch (e: SQLiteBlobTooBigException) {
                         Log.w(
                             TAG,
@@ -352,8 +368,18 @@ class ConversationRepository(
                 }
                 val toDeleteIds = existingIds - newById.keys
 
+                // This cold path may need old rows to collect attachments. Use the complete
+                // chunk-capable reader; never skip an oversized row and infer it was empty.
+                if (toDeleteIds.isNotEmpty() || toUpsert.isNotEmpty()) {
+                    val changed = toUpsert.mapTo(mutableSetOf()) { it.id } + toDeleteIds
+                    messageNodeDAO.loadCompleteNodes(conversation.id.toString())
+                        .filter { it.id in changed }.forEach { old ->
+                            discardedFiles += attachmentUrls(JsonInstant.decodeFromString<List<UIMessage>>(old.messages))
+                        }
+                }
+
                 if (toDeleteIds.isNotEmpty()) {
-                    messageNodeDAO.deleteByIds(toDeleteIds.toList())
+                    toDeleteIds.toList().chunked(200).forEach { messageNodeDAO.deleteByIds(it) }
                 }
                 if (toUpsert.isNotEmpty()) {
                     messageNodeDAO.insertAll(toUpsert)
@@ -369,9 +395,60 @@ class ConversationRepository(
                         currentNodes = conversation.messageNodes,
                     )
                 }
+                conversation
             }
+            deleteUnreferencedChatFiles(discardedFiles)
+            saved
         } catch (e: Exception) {
             Log.e(TAG, "updateConversation failed, conversationId=${conversation.id}", e)
+            throw e
+        }
+    }
+
+    /** Persist a session-owned append/replace journal without comparing untouched message bodies. */
+    internal suspend fun updateConversationWithDelta(
+        conversation: Conversation,
+        previous: Conversation,
+        delta: ConversationNodeDelta,
+    ): Conversation = withContext(Dispatchers.IO) {
+        require(delta.appliesTo(previous, conversation)) { "Node delta does not match the committed history" }
+        val changes = delta.changes
+        require(changes.upserts.none { (_, node) -> node.messages.any { it.hasBase64Part() } })
+        val discardedFiles = mutableSetOf<String>()
+        try {
+            val saved = database.withTransaction {
+                // A late checkpoint must never create nodes after the parent conversation was deleted.
+                check(conversationDAO.existsById(conversation.id.toString())) { "Conversation no longer exists" }
+                var cleanedNodes: MutableList<MessageNode>? = null
+                val upserts = changes.upserts.map { (index, node) ->
+                    if (index < previous.messageNodes.size) {
+                        discardedFiles += attachmentUrls(previous.messageNodes[index].messages) - attachmentUrls(node.messages)
+                    }
+                    val messages = filesManager.withoutDeletedAttachments(node.messages)
+                    val cleaned = if (messages === node.messages) node else node.copy(messages = messages)
+                    if (cleaned !== node) {
+                        if (cleanedNodes == null) cleanedNodes = conversation.messageNodes.toMutableList()
+                        cleanedNodes!![index] = cleaned
+                    }
+                    index to cleaned
+                }
+                val conversation = cleanedNodes?.let { conversation.copy(messageNodes = it) } ?: conversation
+                val entities = upserts.map { (index, node) ->
+                    MessageNodeEntity(node.id.toString(), conversation.id.toString(), index,
+                        JsonInstant.encodeToString(node.messages), node.selectIndex)
+                }
+                conversationDAO.update(conversationMetadataToEntity(conversation))
+                if (entities.isNotEmpty()) messageNodeDAO.insertAll(entities)
+                messageFtsManager.reindexNodes(
+                    conversation.id.toString(), conversation.title, conversation.updateAt,
+                    changes.changedIds, upserts.map { it.second }, failOnError = true,
+                )
+                conversation
+            }
+            deleteUnreferencedChatFiles(discardedFiles)
+            saved
+        } catch (e: Exception) {
+            Log.e(TAG, "updateConversationWithDelta failed, conversationId=${conversation.id}", e)
             throw e
         }
     }
@@ -391,10 +468,64 @@ class ConversationRepository(
                     conversationToConversationEntity(conversation)
                 )
             }
-            filesManager.deleteChatFiles(fullConversation.files)
+            deleteUnreferencedChatFiles(fullConversation.files.mapTo(mutableSetOf()) { it.toString() })
         } catch (e: Exception) {
             Log.e(TAG, "deleteConversation failed, conversationId=${conversation.id}", e)
             throw e
+        }
+    }
+
+    /** Preserve the original conversation/list identity when no deleted attachment is present. */
+    fun withoutDeletedAttachments(conversation: Conversation): Conversation {
+        if (!filesManager.hasDeletedAttachments) return conversation
+        var changed = false
+        val nodes = conversation.messageNodes.map { node ->
+            val messages = filesManager.withoutDeletedAttachments(node.messages)
+            if (messages === node.messages) node else {
+                changed = true
+                node.copy(messages = messages)
+            }
+        }
+        return if (changed) conversation.copy(messageNodes = nodes) else conversation
+    }
+
+    /** Each read is complete (including oversized rows), and each update is compare-and-set. */
+    suspend fun repairInvalidAttachments(): Int = withContext(Dispatchers.IO) {
+        var repaired = 0
+        for (conversationId in conversationDAO.getAllIds()) {
+            for (id in messageNodeDAO.getNodeIdsOfConversation(conversationId)) {
+                database.withTransaction {
+                    val entity = messageNodeDAO.loadCompleteNode(id) ?: return@withTransaction
+                    val original = JsonInstant.decodeFromString<List<UIMessage>>(entity.messages)
+                    check(original.isNotEmpty() && entity.selectIndex in original.indices) {
+                        "会话包含无法读取的消息，附件清理已停止，原始消息未被覆盖。"
+                    }
+                    val cleaned = filesManager.validAttachments(original)
+                    if (cleaned !== original) {
+                        repaired += messageNodeDAO.repairAttachments(
+                            entity.id, entity.messages, JsonInstant.encodeToString(cleaned),
+                        )
+                    }
+                }
+            }
+        }
+        repaired
+    }
+
+    /** Lifecycle garbage collection follows durable writes and retains every DB branch/settings reference. */
+    private suspend fun deleteUnreferencedChatFiles(urls: Set<String>) {
+        if (urls.isEmpty()) return
+        val store = settingsStore ?: return
+        for (url in urls) {
+            val file = localAttachmentFile(url) ?: continue
+            if (!filesManager.isManagedChatFile(url)) continue
+            database.withTransaction {
+                val settings = store.settingsFlow.value
+                if (!settings.init && !JsonInstant.encodeToString(settings).contains(file.name) &&
+                    !messageNodeDAO.referencesFile(file.name)) {
+                    filesManager.deleteChatFiles(listOf(file.toUri()))
+                }
+            }
         }
     }
 
@@ -426,6 +557,10 @@ class ConversationRepository(
 
     fun conversationToConversationEntity(conversation: Conversation): ConversationEntity {
         require(conversation.messageNodes.none { it.messages.any { message -> message.hasBase64Part() } })
+        return conversationMetadataToEntity(conversation)
+    }
+
+    private fun conversationMetadataToEntity(conversation: Conversation): ConversationEntity {
         return ConversationEntity(
             id = conversation.id.toString(),
             title = conversation.title,
@@ -522,7 +657,11 @@ class ConversationRepository(
 
         return database.withTransaction {
             messageNodeDAO.loadCompleteNodes(conversationId).map { entity ->
-                val messages = JsonInstant.decodeFromString<List<UIMessage>>(entity.messages)
+                val original = JsonInstant.decodeFromString<List<UIMessage>>(entity.messages)
+                val messages = filesManager.validAttachments(original)
+                if (messages !== original) {
+                    messageNodeDAO.repairAttachments(entity.id, entity.messages, JsonInstant.encodeToString(messages))
+                }
                 check(messages.isNotEmpty() && entity.selectIndex in messages.indices) {
                     "会话包含无法读取的消息，请先恢复记录。原有记录未被修改。"
                 }

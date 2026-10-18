@@ -13,6 +13,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import me.rerere.rikkahub.data.datastore.AutoBackupConfig
 import me.rerere.rikkahub.data.datastore.Settings
 import me.rerere.rikkahub.data.datastore.SettingsStore
 import me.rerere.rikkahub.data.repository.ConversationRepository
@@ -47,6 +48,13 @@ class BackupVM(
     init {
         loadBackupFileItems()
         loadS3BackupFileItems()
+    }
+
+    fun updateAutoBackupConfig(update: (AutoBackupConfig) -> AutoBackupConfig) {
+        if (settings.value.init) return
+        viewModelScope.launch {
+            settingsStore.update { current -> current.copy(autoBackupConfig = update(current.autoBackupConfig)) }
+        }
     }
 
     fun updateSettings(settings: Settings) {

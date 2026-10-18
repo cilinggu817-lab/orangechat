@@ -7,6 +7,7 @@
 package me.rerere.rikkahub.service
 
 import me.rerere.rikkahub.data.ai.mcp.normalizeMcpArguments
+import me.rerere.rikkahub.data.repository.ConversationNodeChanges
 
 import android.app.Application
 import android.app.PendingIntent
@@ -1015,10 +1016,11 @@ class ChatService(
                         if (regenerationNodeId != null && regenerationMessageId == null) {
                             regenerationMessageId = checkpointMessages.firstOrNull { it.id !in requestMessageIds }?.id
                         }
-                        val updated = session.state.value.withGenerationMessages(checkpointMessages, buildMap {
+                        val mutation = session.state.value.generationMessageMutation(checkpointMessages, buildMap {
                             if (regenerationNodeId != null) regenerationMessageId?.let { put(it, regenerationNodeId) }
                         })
-                        saveConversationLocked(conversationId, updated)
+                        applyMessageMutationLocked(conversationId, mutation)
+                        saveConversationLocked(conversationId, session.state.value)
                     }
                 },
             ).onCompletion {
@@ -1029,13 +1031,11 @@ class ChatService(
                 withContext(NonCancellable) {
                     if (!session.isDeleted) session.withStateLock {
                         val current = session.state.value
-                        updateConversation(conversationId, current.copy(
-                            messageNodes = current.messageNodes.map { node ->
-                                if (node.id in current.activeCompressedMessageNodeIds) node else
-                                    node.copy(messages = node.messages.map { it.finishReasoning() })
-                            },
-                            updateAt = Instant.now(),
-                        ))
+                        val archived = current.activeCompressedMessageNodeIds
+                        val mutation = current.generationMessageMutation(current.messageNodes
+                            .filterNot { it.id in archived }.flatMap { it.messages }.map { it.finishReasoning() })
+                        applyMessageMutationLocked(conversationId, mutation)
+                        updateConversation(conversationId, session.state.value.copy(updateAt = Instant.now()))
                     }
                 }
 
@@ -1050,10 +1050,10 @@ class ChatService(
                             regenerationMessageId = chunk.messages.firstOrNull { it.id !in requestMessageIds }?.id
                         }
                         session.withStateLock {
-                            val updatedConversation = session.state.value.withGenerationMessages(chunk.messages, buildMap {
+                            val mutation = session.state.value.generationMessageMutation(chunk.messages, buildMap {
                                 if (regenerationNodeId != null) regenerationMessageId?.let { put(it, regenerationNodeId) }
                             })
-                            updateConversation(conversationId, updatedConversation)
+                            applyMessageMutationLocked(conversationId, mutation)
                         }
 
                         // 如果应用不在前台，发送 Live Update 通知
@@ -1706,8 +1706,38 @@ class ChatService(
         check(conversation.compressionRevision >= session.state.value.compressionRevision) {
             "摘要已变更，请重新打开会话后操作。"
         }
-        checkFilesDelete(conversation, session.state.value)
-        session.state.value = conversation
+        val cleaned = if (conversation.messageNodes === session.state.value.messageNodes) conversation else
+            conversationRepo.withoutDeletedAttachments(conversation)
+        if (cleaned.messageNodes !== session.state.value.messageNodes) {
+            session.messageJournal.invalidate()
+        }
+        session.state.value = cleaned
+    }
+
+    /** Caller holds the pinned state lock; unknown full-history edits keep the conservative path. */
+    internal fun applyMessageMutationLocked(conversationId: Uuid, mutation: ConversationMessageMutation) {
+        val session = getOrCreateSession(conversationId)
+        session.requireActive()
+        require(mutation.previous.id == conversationId && mutation.conversation.id == conversationId)
+        check(session.state.value === mutation.previous) { "Message mutation no longer matches current state" }
+        // Filter only changed nodes on this hot path; maintenance separately cleans untouched
+        // active history. A delayed stream chunk cannot reintroduce a manually deleted file.
+        var nodes: MutableList<me.rerere.rikkahub.data.model.MessageNode>? = null
+        val upserts = mutation.changes.upserts.map { (index, node) ->
+            val messages = filesManager.withoutDeletedAttachments(node.messages)
+            val cleaned = if (messages === node.messages) node else node.copy(messages = messages)
+            if (cleaned !== node) {
+                if (nodes == null) nodes = mutation.conversation.messageNodes.toMutableList()
+                nodes!![index] = cleaned
+            }
+            index to cleaned
+        }
+        val cleaned = nodes?.let { mutation.conversation.copy(messageNodes = it) } ?: mutation.conversation
+        val safeMutation = if (cleaned === mutation.conversation) mutation else ConversationMessageMutation(
+            mutation.previous, cleaned, ConversationNodeChanges(upserts, mutation.changes.deletions),
+        )
+        session.messageJournal.record(safeMutation, session.persistedConversation)
+        session.state.value = cleaned
     }
 
     fun updateConversationState(conversationId: Uuid, update: (Conversation) -> Conversation) {
@@ -1812,15 +1842,43 @@ class ChatService(
         folderRepository.deleteFolder(folderId)
     }
 
-    private fun checkFilesDelete(newConversation: Conversation, oldConversation: Conversation) {
-        val newFiles = newConversation.files
-        val oldFiles = oldConversation.files
-        val deletedFiles = oldFiles.filter { file ->
-            newFiles.none { it == file }
+    private val attachmentMaintenanceMutex = Mutex()
+
+    suspend fun deleteManagedAttachments(ids: Set<Long>): Int = attachmentMaintenanceMutex.withLock {
+        var deleted = 0
+        try {
+            for (id in ids) if (filesManager.delete(id)) deleted++
+            conversationRepo.repairInvalidAttachments()
+        } finally {
+            withContext(NonCancellable) { refreshAttachmentReferences() }
         }
-        if (deletedFiles.isNotEmpty()) {
-            filesManager.deleteChatFiles(deletedFiles)
-            Log.w(TAG, "checkFilesDelete: $deletedFiles")
+        deleted
+    }
+
+    suspend fun cleanInvalidAttachments(): Pair<Int, Int> = attachmentMaintenanceMutex.withLock {
+        try {
+            filesManager.cleanInvalidFiles() to conversationRepo.repairInvalidAttachments()
+        } finally {
+            withContext(NonCancellable) { refreshAttachmentReferences() }
+        }
+    }
+
+    private suspend fun refreshAttachmentReferences() = withContext(Dispatchers.Main.immediate) {
+        sessions.values.toList().forEach { session ->
+            try {
+                if (!session.isDeleted) session.withStateLock {
+                    val current = session.state.value
+                    val cleaned = conversationRepo.withoutDeletedAttachments(current)
+                    if (cleaned !== current) {
+                        session.messageJournal.invalidate()
+                        saveConversationLocked(session.id, cleaned)
+                    }
+                }
+            } catch (error: CancellationException) {
+                // A concurrent conversation deletion owns its own cleanup. Keep refreshing
+                // other live sessions; propagate actual task cancellation unchanged.
+                if (!session.isDeleted) throw error
+            }
         }
     }
 
@@ -1848,12 +1906,23 @@ class ChatService(
 
         val updatedConversation = getConversationFlow(conversationId).value
 
-        if (!exists) {
+        val saved = if (!exists) {
             conversationRepo.insertConversation(updatedConversation)
         } else {
-            conversationRepo.updateConversation(updatedConversation, session.persistedConversation)
+            val previous = session.persistedConversation
+            val delta = session.messageJournal.deltaFor(previous, updatedConversation)
+            if (previous != null && delta != null) {
+                conversationRepo.updateConversationWithDelta(updatedConversation, previous, delta)
+            } else conversationRepo.updateConversation(updatedConversation, previous)
         }
-        session.persistedConversation = updatedConversation
+        // Repository filtering also runs after acquiring its DB writer transaction. Only
+        // patch this saved list if a caller has not published newer nodes during suspension.
+        if (saved.messageNodes !== updatedConversation.messageNodes &&
+            session.state.value.messageNodes === updatedConversation.messageNodes) {
+            session.state.value = session.state.value.copy(messageNodes = saved.messageNodes)
+        }
+        session.persistedConversation = saved
+        session.messageJournal.committed()
     }
 
     // ---- 翻译消息 ----
@@ -2102,7 +2171,7 @@ class ChatService(
     private fun UIMessagePart.copyWithForkedFileUrl(): UIMessagePart {
         fun copyLocalFileIfNeeded(url: String): String {
             if (!url.startsWith("file:")) return url
-            val copied = filesManager.createChatFilesByContents(listOf(url.toUri())).firstOrNull()
+            val copied = filesManager.createChatFilesByContents(listOf(url.toUri()), forceCopy = true).firstOrNull()
             return copied?.toString() ?: url
         }
 
