@@ -45,7 +45,6 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.datetime.TimeZone
 import kotlinx.datetime.toInstant
 import kotlinx.serialization.json.JsonObject
@@ -83,7 +82,6 @@ import me.rerere.rikkahub.RouteActivity
 import me.rerere.rikkahub.data.ai.GenerationChunk
 import me.rerere.rikkahub.data.ai.GenerationHandler
 import me.rerere.rikkahub.data.ai.mcp.McpManager
-import me.rerere.rikkahub.data.ai.mcp.recentContinuityPrompt
 import me.rerere.rikkahub.data.ai.tools.LocalTools
 import me.rerere.rikkahub.data.ai.tools.SystemTools
 import me.rerere.rikkahub.data.ai.tools.ToolNaming
@@ -933,25 +931,6 @@ class ChatService(
                 activitySnapshot, activityUserId,
             )
 
-            // Continuity is an app-level transport concern, not a tool the model
-            // has to remember to call. Only sync at the start of an ordinary
-            // user turn; tool-approval continuations skip this path.
-            val recentCrossClientContext = if (messagesForGeneration.lastOrNull()?.role == MessageRole.USER) {
-                withTimeoutOrNull(5_000L) {
-                    runCatching {
-                        mcpManager.syncRecentContinuity(
-                            assistant = assistant,
-                            conversationId = conversationId.toString(),
-                            messages = messagesForGeneration,
-                        )
-                    }.onFailure {
-                        Log.w(TAG, "Recent cross-client continuity sync failed", it)
-                    }.getOrNull()
-                }
-            } else {
-                null
-            }
-
             // start generating
             generationHandler.generateText(
                 settings = settings,
@@ -988,7 +967,6 @@ class ChatService(
                 pluginPromptInjections = buildList {
                     addAll(pluginToolProvider.getPluginPromptInjections())
                     settings.displaySetting.buildAnniversaryPrompt()?.let(::add)
-                    recentCrossClientContext?.let { add(recentContinuityPrompt(it)) }
                 },
                 conversationId = conversationId.toString(),
             ).onCompletion {
@@ -1052,23 +1030,6 @@ class ChatService(
                         activityUserId,
                     )
                 }.onFailure { Log.w(TAG, "Could not acknowledge proactive activity records", it) }
-            }
-
-            // Publish the completed assistant turn as well, so another client
-            // opened immediately after this reply does not miss the last line.
-            appScope.launch {
-                withTimeoutOrNull(5_000L) {
-                    runCatching {
-                        mcpManager.syncRecentContinuity(
-                            assistant = assistant,
-                            conversationId = conversationId.toString(),
-                            messages = finalConversation.currentMessages,
-                            returnContext = false,
-                        )
-                    }.onFailure {
-                        Log.w(TAG, "Post-reply continuity sync failed", it)
-                    }
-                }
             }
 
             // 自动唤起网易云音乐：扫描刚完成的 assistant 文本中的 orpheus:// scheme
