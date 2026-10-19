@@ -22,6 +22,7 @@ import kotlinx.coroutines.sync.withLock
 import me.rerere.rikkahub.data.model.Conversation
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 import kotlin.uuid.Uuid
 
 private const val TAG = "ConversationSession"
@@ -43,6 +44,8 @@ class ConversationSession(
     val isDeleted: Boolean get() = deleted.get()
     internal var persistedConversation: Conversation? = null
     internal val messageJournal = ConversationMessageJournal()
+    private val lifecycleEpoch = AtomicLong(0)
+    internal val epoch: Long get() = lifecycleEpoch.get()
 
     internal fun requireActive() {
         if (isDeleted) throw CancellationException("Conversation was deleted")
@@ -50,7 +53,41 @@ class ConversationSession(
 
     internal fun markDeleted(): List<Job> {
         deleted.set(true)
+        lifecycleEpoch.incrementAndGet()
         return cancelJobs()
+    }
+
+    internal suspend fun initialize(
+        load: suspend () -> Conversation?,
+        create: suspend () -> Conversation,
+    ): Conversation = withStateLock {
+        if (!state.value.messageNodesLoaded) {
+            val saved = load()
+            val loaded = saved ?: create()
+            require(loaded.id == id)
+            loaded.requireMessageNodesLoaded()
+            messageJournal.invalidate()
+            persistedConversation = saved
+            state.value = loaded
+        }
+        state.value
+    }
+
+    /** Keep the flow and references held by open screens alive across Undo. */
+    internal suspend fun restore(persist: suspend () -> Conversation) = withContext(NonCancellable) {
+        withRefSuspend {
+            saveMutex.withLock {
+                check(!isGenerating) { "会话仍在生成，请稍后恢复。" }
+                val restored = persist()
+                require(restored.id == id)
+                restored.requireMessageNodesLoaded()
+                lifecycleEpoch.incrementAndGet()
+                messageJournal.invalidate()
+                persistedConversation = restored
+                state.value = restored
+                deleted.set(false)
+            }
+        }
     }
 
     internal fun reopenAfterFailedDelete() {
@@ -102,14 +139,24 @@ class ConversationSession(
     }
 
     /** Persist only metadata, then patch the latest state without replacing in-flight messages. */
-    internal suspend fun saveGeneratedTitle(title: String, persist: suspend () -> Boolean) {
+    internal suspend fun saveGeneratedTitle(
+        title: String,
+        expectedEpoch: Long = epoch,
+        persist: suspend () -> Boolean,
+    ) {
         withStateLock {
+            if (epoch != expectedEpoch) return@withStateLock
             if (persist()) state.value = state.value.copy(title = title)
         }
     }
 
-    internal suspend fun saveGeneratedSuggestions(suggestions: List<String>, persist: suspend () -> Boolean) {
+    internal suspend fun saveGeneratedSuggestions(
+        suggestions: List<String>,
+        expectedEpoch: Long = epoch,
+        persist: suspend () -> Boolean,
+    ) {
         withStateLock {
+            if (epoch != expectedEpoch) return@withStateLock
             if (persist()) state.value = state.value.copy(chatSuggestions = suggestions)
         }
     }

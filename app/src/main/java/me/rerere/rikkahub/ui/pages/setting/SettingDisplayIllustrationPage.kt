@@ -8,7 +8,7 @@ package me.rerere.rikkahub.ui.pages.setting
 
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.Image
+import coil3.compose.AsyncImage
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -39,7 +39,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.foundation.background
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -388,102 +387,97 @@ fun SettingDisplayIllustrationPage(vm: SettingVM = koinViewModel()) {
                         },
                     )
                     if (displaySetting.userAvatarFramePath.isNotBlank() && File(displaySetting.userAvatarFramePath).exists()) {
-                        val userFrameBitmap = remember(displaySetting.userAvatarFramePath) {
-                            android.graphics.BitmapFactory.decodeFile(displaySetting.userAvatarFramePath)
-                        }
-                        if (userFrameBitmap != null) {
-                            // 实时预览：圆形头像 + 挂件叠加
-                            item(
-                                headlineContent = { Text("预览") },
-                                supportingContent = {
+                        // 实时预览：圆形头像 + 挂件叠加
+                        item(
+                            headlineContent = { Text("预览") },
+                            supportingContent = {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(160.dp),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    // 参考圆形头像
                                     Box(
                                         modifier = Modifier
-                                            .fillMaxWidth()
-                                            .height(160.dp),
-                                        contentAlignment = Alignment.Center
-                                    ) {
-                                        // 参考圆形头像
-                                        Box(
-                                            modifier = Modifier
-                                                .padding(0.dp)
-                                                .size(80.dp)
-                                                .clip(CircleShape)
-                                                .background(MaterialTheme.colorScheme.surfaceVariant)
-                                        )
-                                        // 挂件叠加层
-                                        Box(
-                                            modifier = Modifier
-                                                .offset(
-                                                    x = displaySetting.userAvatarFrameOffsetX.dp,
-                                                    y = displaySetting.userAvatarFrameOffsetY.dp
-                                                )
-                                                .size((80 * displaySetting.userAvatarFrameScale).dp)
-                                        ) {
-                                            Image(
-                                                bitmap = userFrameBitmap.asImageBitmap(),
-                                                contentDescription = "用户头像挂件",
-                                                modifier = Modifier.fillMaxSize(),
-                                                contentScale = ContentScale.Fit,
+                                            .padding(0.dp)
+                                            .size(80.dp)
+                                            .clip(CircleShape)
+                                            .background(MaterialTheme.colorScheme.surfaceVariant)
+                                    )
+                                    // 挂件叠加层
+                                    Box(
+                                        modifier = Modifier
+                                            .offset(
+                                                x = displaySetting.userAvatarFrameOffsetX.dp,
+                                                y = displaySetting.userAvatarFrameOffsetY.dp
                                             )
-                                        }
+                                            .size((80 * displaySetting.userAvatarFrameScale).dp)
+                                    ) {
+                                        AsyncImage(
+                                            model = File(displaySetting.userAvatarFramePath),
+                                            contentDescription = "用户头像挂件",
+                                            modifier = Modifier.fillMaxSize(),
+                                            contentScale = ContentScale.Fit,
+                                        )
                                     }
-                                },
-                            )
-                            // 偏移 X
-                            item(
-                                headlineContent = { Text("偏移 X") },
-                                supportingContent = {
-                                    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                        CommitSlider(
-                                            value = displaySetting.userAvatarFrameOffsetX,
-                                            onValuePreview = { displaySetting = displaySetting.copy(userAvatarFrameOffsetX = it) },
-                                            onValueChange = { updateDisplaySetting(displaySetting.copy(userAvatarFrameOffsetX = it)) },
-                                            valueRange = -100f..100f,
-                                            modifier = Modifier.weight(1f)
-                                        ) { draft, slider ->
-                                            slider()
-                                            Text("${draft.toInt()}")
-                                        }
+                                }
+                            },
+                        )
+                        // 偏移 X
+                        item(
+                            headlineContent = { Text("偏移 X") },
+                            supportingContent = {
+                                Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    CommitSlider(
+                                        value = displaySetting.userAvatarFrameOffsetX,
+                                        onValuePreview = { displaySetting = displaySetting.copy(userAvatarFrameOffsetX = it) },
+                                        onValueChange = { updateDisplaySetting(displaySetting.copy(userAvatarFrameOffsetX = it)) },
+                                        valueRange = -100f..100f,
+                                        modifier = Modifier.weight(1f)
+                                    ) { draft, slider ->
+                                        slider()
+                                        Text("${draft.toInt()}")
                                     }
-                                },
-                            )
-                            // 偏移 Y
-                            item(
-                                headlineContent = { Text("偏移 Y") },
-                                supportingContent = {
-                                    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                        CommitSlider(
-                                            value = displaySetting.userAvatarFrameOffsetY,
-                                            onValuePreview = { displaySetting = displaySetting.copy(userAvatarFrameOffsetY = it) },
-                                            onValueChange = { updateDisplaySetting(displaySetting.copy(userAvatarFrameOffsetY = it)) },
-                                            valueRange = -100f..100f,
-                                            modifier = Modifier.weight(1f)
-                                        ) { draft, slider ->
-                                            slider()
-                                            Text("${draft.toInt()}")
-                                        }
+                                }
+                            },
+                        )
+                        // 偏移 Y
+                        item(
+                            headlineContent = { Text("偏移 Y") },
+                            supportingContent = {
+                                Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    CommitSlider(
+                                        value = displaySetting.userAvatarFrameOffsetY,
+                                        onValuePreview = { displaySetting = displaySetting.copy(userAvatarFrameOffsetY = it) },
+                                        onValueChange = { updateDisplaySetting(displaySetting.copy(userAvatarFrameOffsetY = it)) },
+                                        valueRange = -100f..100f,
+                                        modifier = Modifier.weight(1f)
+                                    ) { draft, slider ->
+                                        slider()
+                                        Text("${draft.toInt()}")
                                     }
-                                },
-                            )
-                            // 缩放
-                            item(
-                                headlineContent = { Text("缩放") },
-                                supportingContent = {
-                                    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                        CommitSlider(
-                                            value = displaySetting.userAvatarFrameScale,
-                                            onValuePreview = { displaySetting = displaySetting.copy(userAvatarFrameScale = it) },
-                                            onValueChange = { updateDisplaySetting(displaySetting.copy(userAvatarFrameScale = it)) },
-                                            valueRange = 0.5f..2f,
-                                            modifier = Modifier.weight(1f)
-                                        ) { draft, slider ->
-                                            slider()
-                                            Text("${(draft * 100).toInt()}%")
-                                        }
+                                }
+                            },
+                        )
+                        // 缩放
+                        item(
+                            headlineContent = { Text("缩放") },
+                            supportingContent = {
+                                Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    CommitSlider(
+                                        value = displaySetting.userAvatarFrameScale,
+                                        onValuePreview = { displaySetting = displaySetting.copy(userAvatarFrameScale = it) },
+                                        onValueChange = { updateDisplaySetting(displaySetting.copy(userAvatarFrameScale = it)) },
+                                        valueRange = 0.5f..2f,
+                                        modifier = Modifier.weight(1f)
+                                    ) { draft, slider ->
+                                        slider()
+                                        Text("${(draft * 100).toInt()}%")
                                     }
-                                },
-                            )
-                        }
+                                }
+                            },
+                        )
                     }
 
                     // ===== AI头像挂件 =====
@@ -507,102 +501,97 @@ fun SettingDisplayIllustrationPage(vm: SettingVM = koinViewModel()) {
                         },
                     )
                     if (displaySetting.aiAvatarFramePath.isNotBlank() && File(displaySetting.aiAvatarFramePath).exists()) {
-                        val aiFrameBitmap = remember(displaySetting.aiAvatarFramePath) {
-                            android.graphics.BitmapFactory.decodeFile(displaySetting.aiAvatarFramePath)
-                        }
-                        if (aiFrameBitmap != null) {
-                            // 实时预览：圆形头像 + 挂件叠加
-                            item(
-                                headlineContent = { Text("预览") },
-                                supportingContent = {
+                        // 实时预览：圆形头像 + 挂件叠加
+                        item(
+                            headlineContent = { Text("预览") },
+                            supportingContent = {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(160.dp),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    // 参考圆形头像
                                     Box(
                                         modifier = Modifier
-                                            .fillMaxWidth()
-                                            .height(160.dp),
-                                        contentAlignment = Alignment.Center
-                                    ) {
-                                        // 参考圆形头像
-                                        Box(
-                                            modifier = Modifier
-                                                .padding(0.dp)
-                                                .size(80.dp)
-                                                .clip(CircleShape)
-                                                .background(MaterialTheme.colorScheme.surfaceVariant)
-                                        )
-                                        // 挂件叠加层
-                                        Box(
-                                            modifier = Modifier
-                                                .offset(
-                                                    x = displaySetting.aiAvatarFrameOffsetX.dp,
-                                                    y = displaySetting.aiAvatarFrameOffsetY.dp
-                                                )
-                                                .size((80 * displaySetting.aiAvatarFrameScale).dp)
-                                        ) {
-                                            Image(
-                                                bitmap = aiFrameBitmap.asImageBitmap(),
-                                                contentDescription = "AI头像挂件",
-                                                modifier = Modifier.fillMaxSize(),
-                                                contentScale = ContentScale.Fit,
+                                            .padding(0.dp)
+                                            .size(80.dp)
+                                            .clip(CircleShape)
+                                            .background(MaterialTheme.colorScheme.surfaceVariant)
+                                    )
+                                    // 挂件叠加层
+                                    Box(
+                                        modifier = Modifier
+                                            .offset(
+                                                x = displaySetting.aiAvatarFrameOffsetX.dp,
+                                                y = displaySetting.aiAvatarFrameOffsetY.dp
                                             )
-                                        }
+                                            .size((80 * displaySetting.aiAvatarFrameScale).dp)
+                                    ) {
+                                        AsyncImage(
+                                            model = File(displaySetting.aiAvatarFramePath),
+                                            contentDescription = "AI头像挂件",
+                                            modifier = Modifier.fillMaxSize(),
+                                            contentScale = ContentScale.Fit,
+                                        )
                                     }
-                                },
-                            )
-                            // 偏移 X
-                            item(
-                                headlineContent = { Text("偏移 X") },
-                                supportingContent = {
-                                    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                        CommitSlider(
-                                            value = displaySetting.aiAvatarFrameOffsetX,
-                                            onValuePreview = { displaySetting = displaySetting.copy(aiAvatarFrameOffsetX = it) },
-                                            onValueChange = { updateDisplaySetting(displaySetting.copy(aiAvatarFrameOffsetX = it)) },
-                                            valueRange = -100f..100f,
-                                            modifier = Modifier.weight(1f)
-                                        ) { draft, slider ->
-                                            slider()
-                                            Text("${draft.toInt()}")
-                                        }
+                                }
+                            },
+                        )
+                        // 偏移 X
+                        item(
+                            headlineContent = { Text("偏移 X") },
+                            supportingContent = {
+                                Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    CommitSlider(
+                                        value = displaySetting.aiAvatarFrameOffsetX,
+                                        onValuePreview = { displaySetting = displaySetting.copy(aiAvatarFrameOffsetX = it) },
+                                        onValueChange = { updateDisplaySetting(displaySetting.copy(aiAvatarFrameOffsetX = it)) },
+                                        valueRange = -100f..100f,
+                                        modifier = Modifier.weight(1f)
+                                    ) { draft, slider ->
+                                        slider()
+                                        Text("${draft.toInt()}")
                                     }
-                                },
-                            )
-                            // 偏移 Y
-                            item(
-                                headlineContent = { Text("偏移 Y") },
-                                supportingContent = {
-                                    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                        CommitSlider(
-                                            value = displaySetting.aiAvatarFrameOffsetY,
-                                            onValuePreview = { displaySetting = displaySetting.copy(aiAvatarFrameOffsetY = it) },
-                                            onValueChange = { updateDisplaySetting(displaySetting.copy(aiAvatarFrameOffsetY = it)) },
-                                            valueRange = -100f..100f,
-                                            modifier = Modifier.weight(1f)
-                                        ) { draft, slider ->
-                                            slider()
-                                            Text("${draft.toInt()}")
-                                        }
+                                }
+                            },
+                        )
+                        // 偏移 Y
+                        item(
+                            headlineContent = { Text("偏移 Y") },
+                            supportingContent = {
+                                Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    CommitSlider(
+                                        value = displaySetting.aiAvatarFrameOffsetY,
+                                        onValuePreview = { displaySetting = displaySetting.copy(aiAvatarFrameOffsetY = it) },
+                                        onValueChange = { updateDisplaySetting(displaySetting.copy(aiAvatarFrameOffsetY = it)) },
+                                        valueRange = -100f..100f,
+                                        modifier = Modifier.weight(1f)
+                                    ) { draft, slider ->
+                                        slider()
+                                        Text("${draft.toInt()}")
                                     }
-                                },
-                            )
-                            // 缩放
-                            item(
-                                headlineContent = { Text("缩放") },
-                                supportingContent = {
-                                    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                        CommitSlider(
-                                            value = displaySetting.aiAvatarFrameScale,
-                                            onValuePreview = { displaySetting = displaySetting.copy(aiAvatarFrameScale = it) },
-                                            onValueChange = { updateDisplaySetting(displaySetting.copy(aiAvatarFrameScale = it)) },
-                                            valueRange = 0.5f..2f,
-                                            modifier = Modifier.weight(1f)
-                                        ) { draft, slider ->
-                                            slider()
-                                            Text("${(draft * 100).toInt()}%")
-                                        }
+                                }
+                            },
+                        )
+                        // 缩放
+                        item(
+                            headlineContent = { Text("缩放") },
+                            supportingContent = {
+                                Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    CommitSlider(
+                                        value = displaySetting.aiAvatarFrameScale,
+                                        onValuePreview = { displaySetting = displaySetting.copy(aiAvatarFrameScale = it) },
+                                        onValueChange = { updateDisplaySetting(displaySetting.copy(aiAvatarFrameScale = it)) },
+                                        valueRange = 0.5f..2f,
+                                        modifier = Modifier.weight(1f)
+                                    ) { draft, slider ->
+                                        slider()
+                                        Text("${(draft * 100).toInt()}%")
                                     }
-                                },
-                            )
-                        }
+                                }
+                            },
+                        )
                     }
                 }
             }

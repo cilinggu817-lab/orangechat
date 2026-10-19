@@ -51,6 +51,8 @@ class ConversationRepository(
     // Tests that exercise storage alone may omit settings; cleanup then conservatively keeps files.
     private val settingsStore: SettingsStore? = null,
 ) {
+    private val undoAttachmentNames = java.util.concurrent.ConcurrentHashMap<Uuid, Set<String>>()
+
     companion object {
         private const val PAGE_SIZE = 20
         private const val INITIAL_LOAD_SIZE = 40
@@ -453,26 +455,38 @@ class ConversationRepository(
         }
     }
 
-    suspend fun deleteConversation(conversation: Conversation) {
+    suspend fun deleteConversation(
+        conversation: Conversation,
+        retainAttachments: Boolean = false,
+    ): Conversation = withContext(Dispatchers.IO) {
         try {
-            // 获取完整的 Conversation（包含 messageNodes）以正确清理文件
-            val fullConversation = if (conversation.messageNodes.isEmpty()) {
-                getConversationById(conversation.id) ?: conversation
-            } else {
-                conversation
-            }
+            // Read after generation has stopped; the list projection/old UI snapshot may be stale.
+            val fullConversation = getConversationById(conversation.id) ?: conversation
             messageFtsManager.deleteConversation(conversation.id.toString())
             database.withTransaction {
+                if (retainAttachments) {
+                    undoAttachmentNames[conversation.id] = fullConversation.files.mapNotNull {
+                        localAttachmentFile(it.toString())?.name
+                    }.toSet()
+                }
                 // message_node 会通过 CASCADE 自动删除
                 conversationDAO.delete(
                     conversationToConversationEntity(conversation)
                 )
             }
-            deleteUnreferencedChatFiles(fullConversation.files.mapTo(mutableSetOf()) { it.toString() })
+            if (!retainAttachments) releaseDeletedConversationAttachments(fullConversation)
+            fullConversation
         } catch (e: Exception) {
+            undoAttachmentNames.remove(conversation.id)
             Log.e(TAG, "deleteConversation failed, conversationId=${conversation.id}", e)
             throw e
         }
+    }
+
+    /** Undo keeps bytes until its action completes; recheck references after restore before collection. */
+    suspend fun releaseDeletedConversationAttachments(conversation: Conversation) = withContext(Dispatchers.IO) {
+        undoAttachmentNames.remove(conversation.id)
+        deleteUnreferencedChatFiles(conversation.files.mapTo(mutableSetOf()) { it.toString() })
     }
 
     /** Preserve the original conversation/list identity when no deleted attachment is present. */
@@ -521,7 +535,8 @@ class ConversationRepository(
             if (!filesManager.isManagedChatFile(url)) continue
             database.withTransaction {
                 val settings = store.settingsFlow.value
-                if (!settings.init && !JsonInstant.encodeToString(settings).contains(file.name) &&
+                if (undoAttachmentNames.values.none { file.name in it } &&
+                    !settings.init && !JsonInstant.encodeToString(settings).contains(file.name) &&
                     !messageNodeDAO.referencesFile(file.name)) {
                     filesManager.deleteChatFiles(listOf(file.toUri()))
                 }

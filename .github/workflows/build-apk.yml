@@ -7,6 +7,7 @@ on:
       - master
       - mobile-workflow-v2
       - fix/attachments-sliders-backup
+      - codex/latest-review-optimization-20261019
 
 jobs:
   build:

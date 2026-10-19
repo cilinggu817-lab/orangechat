@@ -401,39 +401,32 @@ class ChatService(
 
     // ---- 初始化对话 ----
 
-    suspend fun initializeConversation(conversationId: Uuid) {
+    suspend fun initializeConversation(
+        conversationId: Uuid,
+        assistantId: Uuid? = null,
+        updateSelectedAssistant: Boolean = true,
+    ) {
         val session = getOrCreateSession(conversationId)
-        val loadedAssistantId = session.withStateLock {
-            // Reopening an already initialized/generating session must keep its newer chunks.
-            if (session.state.value.messageNodesLoaded) return@withStateLock session.state.value.assistantId
-            // Loading and publishing use the same lock as metadata writes, so an older load
-            // cannot overwrite a title or suggestions that finished while opening this chat.
-            val conversation = conversationRepo.getConversationById(conversationId)
-            if (conversation != null) {
-                updateConversation(conversationId, conversation)
-                session.persistedConversation = conversation
-                conversation.assistantId
-            } else {
-                // 新建对话, 并添加预设消息
-                val currentSettings = settingsStore.settingsFlowRaw.first()
-                val assistant = currentSettings.getCurrentAssistant()
-                val newConversation = Conversation.ofId(
-                    id = conversationId,
-                    assistantId = assistant.id,
-                    newConversation = true
-                ).updateCurrentMessages(assistant.presetMessages)
-                updateConversation(conversationId, newConversation)
-                null
-            }
-        }
-        if (loadedAssistantId != null) {
-            // Keep DataStore work outside the conversation lock, and write only when needed.
-            val currentSettings = settingsStore.settingsFlow.value
-            if (currentSettings.assistantId != loadedAssistantId) {
-                settingsStore.updateAssistant(loadedAssistantId)
-            }
+        val loaded = session.initialize(
+            load = { conversationRepo.getConversationById(conversationId) },
+            create = {
+                val settings = settingsStore.settingsFlowRaw.first()
+                val assistant = assistantId?.let(settings::getAssistantById) ?: settings.getCurrentAssistant()
+                Conversation.ofId(conversationId, assistant.id, newConversation = true)
+                    .updateCurrentMessages(assistant.presetMessages)
+            },
+        )
+        if (updateSelectedAssistant && settingsStore.settingsFlow.value.assistantId != loaded.assistantId) {
+            settingsStore.updateAssistant(loaded.assistantId)
         }
     }
+
+    suspend fun replyToBot(conversationId: Uuid, assistantId: Uuid, text: String, timeoutMillis: Long): String =
+        getOrCreateSession(conversationId).awaitBotReply(
+            timeoutMillis = timeoutMillis,
+            initialize = { initializeConversation(conversationId, assistantId, updateSelectedAssistant = false) },
+            send = { sendMessage(conversationId, listOf(UIMessagePart.Text(text))) },
+        )
 
     // ---- 发送消息 ----
 
@@ -443,8 +436,8 @@ class ChatService(
         answer: Boolean = true,
         transientSystemPrompt: String? = null,
         enableTools: Boolean = true,
-    ) {
-        if (content.isEmptyInputMessage()) return
+    ): Job? {
+        if (content.isEmptyInputMessage()) return null
 
         val session = getOrCreateSession(conversationId)
         session.getJob()?.cancel()
@@ -458,6 +451,7 @@ class ChatService(
 
         val job = appScope.launch {
             try {
+                initializeConversation(conversationId, updateSelectedAssistant = false)
                 val settings = settingsStore.settingsFlow.first()
 
                 // 读取最新状态 -> 追加用户消息 -> 落库，整体加锁。
@@ -566,6 +560,7 @@ class ChatService(
             }
         }
         session.setJob(job)
+        return job
     }
 
     // ---- 添加主动消息 ----
@@ -1367,86 +1362,94 @@ class ChatService(
             else -> false
         }
         if (!shouldGenerate) return
+        val session = getOrCreateSession(conversationId)
+        val epoch = session.epoch
 
-        runCatching {
-            val settings = settingsStore.settingsFlow.first()
-            val model = settings.findModelById(settings.titleModelId) ?: return
-            val provider = model.findProvider(settings.providers) ?: return
+        session.withRefSuspend {
+            runCatching {
+                val settings = settingsStore.settingsFlow.first()
+                val model = settings.findModelById(settings.titleModelId) ?: return
+                val provider = model.findProvider(settings.providers) ?: return
 
-            val providerHandler = providerManager.getProviderByType(provider)
-            val result = providerHandler.generateText(
-                providerSetting = provider,
-                messages = listOf(
-                    UIMessage.user(
-                        prompt = settings.titlePrompt.applyPlaceholders(
-                            "locale" to Locale.getDefault().displayName,
-                            "content" to (listOfNotNull(conversation.summaryForGeneration()) + conversation.messagesForGeneration()
-                                .takeLast(4).map { it.summaryAsText() }).joinToString("\n\n"))
+                val providerHandler = providerManager.getProviderByType(provider)
+                val result = providerHandler.generateText(
+                    providerSetting = provider,
+                    messages = listOf(
+                        UIMessage.user(
+                            prompt = settings.titlePrompt.applyPlaceholders(
+                                "locale" to Locale.getDefault().displayName,
+                                "content" to (listOfNotNull(conversation.summaryForGeneration()) + conversation.messagesForGeneration()
+                                    .takeLast(4).map { it.summaryAsText() }).joinToString("\n\n"))
+                        ),
                     ),
-                ),
-                params = TextGenerationParams(
-                    model = model,
-                    reasoningLevel = ReasoningLevel.OFF,
-                ),
-            )
+                    params = TextGenerationParams(
+                        model = model,
+                        reasoningLevel = ReasoningLevel.OFF,
+                    ),
+                )
 
-            val title = result.choices[0].message?.toText()?.trim() ?: ""
-            getOrCreateSession(conversationId).saveGeneratedTitle(title) {
-                conversationRepo.updateGeneratedTitle(conversationId, title)
+                val title = result.choices[0].message?.toText()?.trim() ?: ""
+                session.saveGeneratedTitle(title, expectedEpoch = epoch) {
+                    conversationRepo.updateGeneratedTitle(conversationId, title)
+                }
+            }.onFailure {
+                it.printStackTrace()
+                Log.e(TAG, "generateTitle failed, conversationId=$conversationId", it)
+                addError(
+                    error = it,
+                    conversationId = conversationId,
+                    title = context.getString(R.string.error_title_generate_title),
+                    solution = ChatErrorSolution.CheckTitleModelSettings,
+                )
             }
-        }.onFailure {
-            it.printStackTrace()
-            Log.e(TAG, "generateTitle failed, conversationId=$conversationId", it)
-            addError(
-                error = it,
-                conversationId = conversationId,
-                title = context.getString(R.string.error_title_generate_title),
-                solution = ChatErrorSolution.CheckTitleModelSettings,
-            )
         }
     }
 
     // ---- 生成建议 ----
 
     suspend fun generateSuggestion(conversationId: Uuid, conversation: Conversation) {
-        runCatching {
-            val settings = settingsStore.settingsFlow.first()
-            val model = settings.findModelById(settings.suggestionModelId) ?: return
-            val provider = model.findProvider(settings.providers) ?: return
+        val session = getOrCreateSession(conversationId)
+        val epoch = session.epoch
+        session.withRefSuspend {
+            runCatching {
+                val settings = settingsStore.settingsFlow.first()
+                val model = settings.findModelById(settings.suggestionModelId) ?: return
+                val provider = model.findProvider(settings.providers) ?: return
 
-            sessions[conversationId]?.let { session ->
-                session.withStateLock {
-                    session.state.value = session.state.value.copy(chatSuggestions = emptyList())
+                sessions[conversationId]?.let { session ->
+                    session.withStateLock {
+                        session.state.value = session.state.value.copy(chatSuggestions = emptyList())
+                    }
                 }
-            }
 
-            val providerHandler = providerManager.getProviderByType(provider)
-            val result = providerHandler.generateText(
-                providerSetting = provider,
-                messages = listOf(
-                    UIMessage.user(
-                        settings.suggestionPrompt.applyPlaceholders(
-                            "locale" to Locale.getDefault().displayName,
-                            "content" to (listOfNotNull(conversation.summaryForGeneration()) + conversation.messagesForGeneration()
-                                .takeLast(8).map { it.summaryAsText() }).joinToString("\n\n")),
-                    )
-                ),
-                params = TextGenerationParams(
-                    model = model,
-                    reasoningLevel = ReasoningLevel.OFF,
-                ),
-            )
-            val suggestions =
-                result.choices[0].message?.toText()?.split("\n")?.map { it.trim() }
-                    ?.filter { it.isNotBlank() } ?: emptyList()
+                val providerHandler = providerManager.getProviderByType(provider)
+                val result = providerHandler.generateText(
+                    providerSetting = provider,
+                    messages = listOf(
+                        UIMessage.user(
+                            settings.suggestionPrompt.applyPlaceholders(
+                                "locale" to Locale.getDefault().displayName,
+                                "content" to (listOfNotNull(conversation.summaryForGeneration()) + conversation.messagesForGeneration()
+                                    .takeLast(8).map { it.summaryAsText() }).joinToString("\n\n")),
+                        )
+                    ),
+                    params = TextGenerationParams(
+                        model = model,
+                        reasoningLevel = ReasoningLevel.OFF,
+                    ),
+                )
+                val suggestions =
+                    result.choices[0].message?.toText()?.split("\n")?.map { it.trim() }
+                        ?.filter { it.isNotBlank() } ?: emptyList()
 
-            val limitedSuggestions = suggestions.take(10)
-            getOrCreateSession(conversationId).saveGeneratedSuggestions(limitedSuggestions) {
-                conversationRepo.updateGeneratedSuggestions(conversationId, limitedSuggestions)
+                val limitedSuggestions = suggestions.take(10)
+                session.saveGeneratedSuggestions(limitedSuggestions, expectedEpoch = epoch) {
+                    conversationRepo.updateGeneratedSuggestions(conversationId, limitedSuggestions)
+                }
+            }.onFailure {
+                it.printStackTrace()
+                Log.e(TAG, "generateSuggestion failed, conversationId=$conversationId", it)
             }
-        }.onFailure {
-            it.printStackTrace()
-            Log.e(TAG, "generateSuggestion failed, conversationId=$conversationId", it)
         }
     }
 
@@ -1784,13 +1787,17 @@ class ChatService(
     }
 
     /** Close the lifecycle before cancellation; finally/late callbacks cannot recreate this id. */
-    suspend fun deleteConversation(conversation: Conversation) = withContext(NonCancellable) {
+    suspend fun deleteConversation(
+        conversation: Conversation,
+        retainAttachments: Boolean = false,
+    ): Conversation = withContext(NonCancellable) {
         conversationLifecycleLocks.getOrPut(conversation.id) { Mutex() }.withLock {
             val session = getOrCreateSession(conversation.id)
             deletedConversationIds.add(conversation.id)
+            var deletedSnapshot = conversation
             try {
                 session.deleteAndAwait {
-                    conversationRepo.deleteConversation(conversation)
+                    deletedSnapshot = conversationRepo.deleteConversation(conversation, retainAttachments)
                 }
             } catch (error: Exception) {
                 // If the database delete did not commit, keep the history usable/retryable.
@@ -1802,6 +1809,7 @@ class ChatService(
                 throw error
             }
             cancelLiveUpdateNotification(conversation.id)
+            deletedSnapshot
         }
     }
 
@@ -1811,12 +1819,11 @@ class ChatService(
         (persisted + active).distinctBy { it.id }.forEach { deleteConversation(it) }
     }
 
-    suspend fun restoreConversation(conversation: Conversation) {
+    suspend fun restoreConversation(conversation: Conversation) = withContext(NonCancellable) {
         conversationLifecycleLocks.getOrPut(conversation.id) { Mutex() }.withLock {
-            conversationRepo.insertConversation(conversation)
+            val session = getOrCreateSession(conversation.id)
+            session.restore { conversationRepo.insertConversation(conversation) }
             deletedConversationIds.remove(conversation.id)
-            sessions.remove(conversation.id)?.cleanup()
-            _sessionsVersion.value++
         }
     }
 

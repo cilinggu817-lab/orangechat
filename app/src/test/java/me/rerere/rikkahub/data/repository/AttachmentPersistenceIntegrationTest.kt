@@ -154,6 +154,42 @@ class AttachmentPersistenceIntegrationTest {
         }
     }
 
+    @Test fun `undo preserves attachment bytes and restores references before collection`() = runBlocking {
+        fixture { _, repository, files, _ ->
+            val file = files.saveManagedFromBytes(FileFolders.UPLOAD, "keep".toByteArray(), "undo.txt", "text/plain")
+            val disk = files.getFile(file)
+            val original = conversation(UIMessage.user("keep text").copy(parts = listOf(
+                UIMessagePart.Text("keep text"), UIMessagePart.Document(disk.toUri().toString(), "undo.txt"),
+            )))
+            repository.insertConversation(original)
+            val removed = repository.deleteConversation(original, retainAttachments = true)
+            assertFalse(repository.existsConversationById(original.id))
+            assertTrue(disk.exists())
+            val restored = repository.insertConversation(removed)
+            repository.releaseDeletedConversationAttachments(removed)
+            assertTrue(disk.exists())
+            assertEquals(original.currentMessages, restored.currentMessages)
+            assertEquals(setOf(disk.toUri().toString()), attachmentUrls(restored.currentMessages))
+        }
+    }
+
+    @Test fun `another deletion cannot collect files held by an open undo window`() = runBlocking {
+        fixture { _, repository, files, _ ->
+            val file = files.saveManagedFromBytes(FileFolders.UPLOAD, "shared".toByteArray(), "undo-shared.txt", "text/plain")
+            val disk = files.getFile(file)
+            val message = UIMessage.user("keep").copy(parts = listOf(UIMessagePart.Document(disk.toUri().toString(), "file.txt")))
+            val first = conversation(message)
+            val second = conversation(message)
+            repository.insertConversation(first)
+            repository.insertConversation(second)
+            val removed = repository.deleteConversation(first, retainAttachments = true)
+            repository.deleteConversation(second)
+            assertTrue("Pending Undo still owns the attachment", disk.exists())
+            repository.releaseDeletedConversationAttachments(removed)
+            assertFalse("Expired Undo releases the last owner", disk.exists())
+        }
+    }
+
     private fun conversation(message: UIMessage) = Conversation(assistantId = Uuid.random(), messageNodes = listOf(message.toMessageNode()))
 
     private suspend fun stored(db: AppDatabase, conversation: Conversation): List<UIMessage> =

@@ -16,6 +16,8 @@ import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
 import me.rerere.rikkahub.data.datastore.SettingsStore
 import me.rerere.rikkahub.data.datastore.getCurrentAssistant
 import me.rerere.rikkahub.data.model.Conversation
@@ -40,9 +42,19 @@ class HistoryVM(
         Log.e(TAG, "Error: ${it.message}")
     }.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
-    fun deleteConversation(conversation: Conversation) {
-        viewModelScope.launch {
-            chatService.deleteConversation(conversation)
+    /** Own the whole Undo window, including navigation cancellation, in a finally block. */
+    suspend fun deleteWithUndo(conversation: Conversation, offerUndo: suspend () -> Boolean) {
+        var deleted: Conversation? = null
+        try {
+            // Keep assignment inside NonCancellable: cancellation cannot lose the cleanup snapshot.
+            withContext(NonCancellable) {
+                deleted = chatService.deleteConversation(conversation, retainAttachments = true)
+            }
+            if (offerUndo()) chatService.restoreConversation(checkNotNull(deleted))
+        } finally {
+            deleted?.let { snapshot ->
+                withContext(NonCancellable) { conversationRepo.releaseDeletedConversationAttachments(snapshot) }
+            }
         }
     }
 
@@ -62,13 +74,4 @@ class HistoryVM(
     fun getPinnedConversations(): Flow<List<Conversation>> =
         conversationRepo.getPinnedConversations()
 
-    fun restoreConversation(conversation: Conversation) {
-        viewModelScope.launch {
-            chatService.restoreConversation(conversation)
-        }
-    }
-
-    suspend fun getFullConversation(conversationId: Uuid): Conversation? {
-        return conversationRepo.getConversationById(conversationId)
-    }
 }
