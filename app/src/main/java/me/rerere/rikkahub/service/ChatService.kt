@@ -96,6 +96,7 @@ import me.rerere.rikkahub.data.ai.transformers.DocumentAsPromptTransformer
 import me.rerere.rikkahub.data.ai.transformers.ExtraInfoInjectionCollector
 import me.rerere.rikkahub.data.ai.transformers.ExtraInfoRequestCache
 import me.rerere.rikkahub.data.ai.transformers.ExtraInfoRequestTransformer
+import me.rerere.rikkahub.data.ai.transformers.extraInfoSnapshotDir
 import me.rerere.rikkahub.data.ai.transformers.OcrTransformer
 import me.rerere.rikkahub.data.ai.transformers.PlaceholderTransformer
 import me.rerere.rikkahub.data.ai.transformers.PromptInjectionTransformer
@@ -189,7 +190,7 @@ class ChatService(
 ) {
     // workspace 系统提示注入 (依赖 workspaceRepository, 故在类内构造)
     private val workspaceReminderTransformer = WorkspaceReminderTransformer(workspaceRepository)
-    private val extraInfoRequestCache = ExtraInfoRequestCache()
+    private val extraInfoRequestCache = ExtraInfoRequestCache(directory = extraInfoSnapshotDir(context))
 
     // 统一会话管理
     private val sessions = ConcurrentHashMap<Uuid, ConversationSession>()
@@ -916,6 +917,19 @@ class ChatService(
             } else {
                 null
             }
+            // Every historical user message keeps the snapshot it was first sent with, so the
+            // request prefix stays byte-identical across turns and the provider cache survives.
+            // The latest message uses only this turn's resolved snapshot.
+            val extraInfoSnapshots = extraInfoRequestCache.snapshots(
+                conversationId = conversationId,
+                messages = messagesForGeneration,
+                option = settings.systemToolsSetting,
+            ).let { stored ->
+                if (latestUserMessage == null || messageRange != null) stored
+                else stored - latestUserMessage.id + listOfNotNull(
+                    extraInfoContext?.takeIf { it.isNotBlank() }?.let { latestUserMessage.id to it }
+                )
+            }
             activitySnapshot = runCatching { activityStore.snapshot() }.getOrElse {
                 Log.w(TAG, "Could not read proactive activity records", it)
                 emptyList()
@@ -954,7 +968,7 @@ class ChatService(
                     add(templateTransformer)
                     add(workspaceReminderTransformer)
                     add(requireNotNull(activityTransformer))
-                    add(ExtraInfoRequestTransformer(latestUserMessage?.id, extraInfoContext))
+                    add(ExtraInfoRequestTransformer(extraInfoSnapshots))
                 },
                 outputTransformers = outputTransformers,
                 tools = if (enableTools) buildAvailableTools(
