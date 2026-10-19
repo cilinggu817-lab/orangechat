@@ -41,6 +41,25 @@ import kotlin.uuid.Uuid
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [28], manifest = Config.NONE, application = Application::class)
 class AttachmentPersistenceIntegrationTest {
+    @Test fun `manual deletion repairs only selected references without scanning unrelated corrupt images`() = runBlocking {
+        fixture(forceSlices = true) { db, repository, files, _ ->
+            val selected = files.saveManagedFromBytes(FileFolders.UPLOAD, "data".toByteArray(), "delete.txt", "text/plain")
+            val document = UIMessagePart.Document(files.getFile(selected).toUri().toString(), "delete.txt")
+            val affected = conversation(UIMessage.user("keep my words").copy(parts = listOf(
+                UIMessagePart.Text("keep my words"), document)))
+            val unrelated = conversation(UIMessage.user("unrelated").copy(parts = listOf(
+                UIMessagePart.Text("unrelated"), UIMessagePart.Image("file:///missing/other-image.png"))))
+            repository.insertConversation(affected)
+            repository.insertConversation(unrelated)
+            assertTrue(files.delete(selected.id))
+            assertEquals(1, repository.repairDeletedAttachmentReferences(setOf(files.getFile(selected).name)))
+            assertEquals("keep my words", stored(db, affected).single().toText())
+            assertTrue(attachmentUrls(stored(db, affected)).isEmpty())
+            assertEquals(setOf("file:///missing/other-image.png"), attachmentUrls(stored(db, unrelated)))
+            assertEquals(0, repository.repairDeletedAttachmentReferences(setOf(files.getFile(selected).name)))
+        }
+    }
+
     @Test fun `a deleted attachment cannot return through a delta and its canonical baseline remains usable`() = runBlocking {
         fixture { db, repository, files, _ ->
             val file = files.saveManagedFromBytes(FileFolders.UPLOAD, "data".toByteArray(), "note.txt", "text/plain")

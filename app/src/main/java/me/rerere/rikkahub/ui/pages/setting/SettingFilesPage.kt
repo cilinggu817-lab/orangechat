@@ -256,6 +256,11 @@ fun SettingFilesPage(
                 }
             }
 
+            if (busy) {
+                androidx.compose.material3.LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                Text("正在移除附件引用，聊天文字会保留…", modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                    style = MaterialTheme.typography.bodySmall)
+            }
             if (files.isEmpty()) {
                 Box(
                     modifier = Modifier

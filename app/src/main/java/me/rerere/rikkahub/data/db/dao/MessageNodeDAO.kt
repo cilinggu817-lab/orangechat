@@ -18,6 +18,9 @@ import me.rerere.rikkahub.data.db.entity.MessageNodeEntity
 
 @Dao
 interface MessageNodeDAO {
+    @RawQuery
+    suspend fun findNodeIdsRaw(query: SupportSQLiteQuery): List<String>
+
     // Conditional repair must not overwrite a newer stream checkpoint or branch edit.
     @Query("UPDATE message_node SET messages = :newMessages WHERE id = :id AND messages = :oldMessages")
     suspend fun repairAttachments(id: String, oldMessages: String, newMessages: String): Int

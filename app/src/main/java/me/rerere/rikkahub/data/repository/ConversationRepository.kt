@@ -14,6 +14,7 @@ import androidx.paging.PagingData
 import androidx.paging.PagingSource
 import androidx.paging.map
 import androidx.room.withTransaction
+import androidx.sqlite.db.SimpleSQLiteQuery
 import androidx.core.net.toUri
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
@@ -486,6 +487,7 @@ class ConversationRepository(
     /** Undo keeps bytes until its action completes; recheck references after restore before collection. */
     suspend fun releaseDeletedConversationAttachments(conversation: Conversation) = withContext(Dispatchers.IO) {
         undoAttachmentNames.remove(conversation.id)
+        filesManager.deleteExtraInfoSnapshots(conversation.id)
         deleteUnreferencedChatFiles(conversation.files.mapTo(mutableSetOf()) { it.toString() })
     }
 
@@ -501,6 +503,33 @@ class ConversationRepository(
             }
         }
         return if (changed) conversation.copy(messageNodes = nodes) else conversation
+    }
+
+    /** Manual deletion only visits rows mentioning the selected filenames; no image decoding/full repair. */
+    suspend fun repairDeletedAttachmentReferences(fileNames: Set<String>): Int = withContext(Dispatchers.IO) {
+        if (fileNames.isEmpty()) return@withContext 0
+        val ids = linkedSetOf<String>()
+        fileNames.toList().chunked(50).forEach { batch ->
+            val clauses = batch.joinToString(" OR ") { "instr(messages, ?) > 0" }
+            ids += messageNodeDAO.findNodeIdsRaw(SimpleSQLiteQuery(
+                "SELECT id FROM message_node WHERE $clauses", batch.toTypedArray(),
+            ))
+        }
+        var repaired = 0
+        for (id in ids) {
+            database.withTransaction {
+                val entity = messageNodeDAO.loadCompleteNode(id) ?: return@withTransaction
+                val original = JsonInstant.decodeFromString<List<UIMessage>>(entity.messages)
+                check(original.isNotEmpty() && entity.selectIndex in original.indices) {
+                    "会话包含无法读取的消息，附件清理已停止，原始消息未被覆盖。"
+                }
+                val cleaned = filesManager.withoutDeletedAttachments(original)
+                if (cleaned !== original) repaired += messageNodeDAO.repairAttachments(
+                    id, entity.messages, JsonInstant.encodeToString(cleaned),
+                )
+            }
+        }
+        repaired
     }
 
     /** Each read is complete (including oversized rows), and each update is compare-and-set. */

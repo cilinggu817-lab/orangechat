@@ -227,10 +227,10 @@ fun ChatInput(
     val resources = LocalResources.current
     val filesManager: FilesManager = koinInject()
     val transcription = LocalASRState.current
-    val directRecorder = remember(context) { DirectAudioRecorder(context) }
+    val directRecorder = remember(context, conversation.id) { DirectAudioRecorder(context) }
     DisposableEffect(directRecorder) { onDispose { directRecorder.cleanup() } }
-    var voiceMessageMode by remember { mutableStateOf(false) }
-    var recordingUsesAudio by remember { mutableStateOf(false) }
+    var voiceMessageMode by remember(conversation.id) { mutableStateOf(false) }
+    var recordingUsesAudio by remember(conversation.id) { mutableStateOf(false) }
     val selectedModel = settings.getCurrentChatModel()
     val wantsDirectAudio = selectedModel?.supportsDirectAudio(selectedModel.findProvider(settings.providers)) == true
     val asr = if (if (voiceMessageMode) recordingUsesAudio else wantsDirectAudio) directRecorder else transcription
