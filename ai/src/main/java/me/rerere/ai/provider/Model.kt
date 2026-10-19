@@ -25,6 +25,7 @@ data class Model(
     val providerOverwrite: ProviderSetting? = null,
     // Discovered from Codex; optional for old configurations and manually added models.
     val codexReasoningEfforts: List<String> = emptyList(),
+    val audioInputMode: AudioInputMode = AudioInputMode.AUTO,
 )
 
 @Serializable
@@ -66,3 +67,16 @@ sealed class BuiltInTools {
 
 
 
+
+@Serializable
+enum class AudioInputMode { AUTO, AUDIO, ASR }
+
+/** Only transports with implemented audio payloads may bypass transcription. */
+fun Model.supportsDirectAudio(provider: ProviderSetting?): Boolean {
+    if (type != ModelType.CHAT || audioInputMode == AudioInputMode.ASR) return false
+    val transportSupportsAudio = provider is ProviderSetting.Google ||
+        (provider is ProviderSetting.OpenAI && !provider.useResponseApi)
+    if (!transportSupportsAudio) return false
+    return audioInputMode == AudioInputMode.AUDIO ||
+        Regex("(^|[/ :])gemini[-_]").containsMatchIn(modelId.lowercase())
+}

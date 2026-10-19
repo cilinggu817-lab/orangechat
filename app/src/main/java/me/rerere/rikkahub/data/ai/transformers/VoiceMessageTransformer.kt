@@ -6,27 +6,33 @@
 
 package me.rerere.rikkahub.data.ai.transformers
 
+import me.rerere.ai.provider.supportsDirectAudio
+import me.rerere.rikkahub.data.datastore.findProvider
+import java.io.File
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
 
 /**
- * Transforms VoiceMessage parts into Text parts for AI providers.
- * Voice messages are displayed as voice bubbles in the UI but sent as text to the AI.
+ * Keep voice bubbles in storage; send audio to capable models and transcripts to other models.
  */
 object VoiceMessageTransformer : InputMessageTransformer {
     override suspend fun transform(
         ctx: TransformerContext,
         messages: List<UIMessage>,
     ): List<UIMessage> {
+        val directAudio = ctx.model.supportsDirectAudio(ctx.model.findProvider(ctx.settings.providers))
         return messages.map { message ->
             message.copy(
                 parts = message.parts.map { part ->
                     when (part) {
                         is UIMessagePart.VoiceMessage -> {
-                            if (part.transcript.isNotBlank()) {
+                            if (directAudio) {
+                                val url = if (part.url.startsWith("/")) android.net.Uri.fromFile(File(part.url)).toString() else part.url
+                                UIMessagePart.Audio(url = url)
+                            } else if (part.transcript.isNotBlank()) {
                                 UIMessagePart.Text(text = part.transcript)
                             } else {
-                                UIMessagePart.Text(text = "[语音消息]")
+                                UIMessagePart.Text(text = "[语音消息：当前模型无法读取此音频，且没有转写文本]")
                             }
                         }
                         else -> part

@@ -177,6 +177,24 @@ private fun SearchServiceOptionsEditor(
     onUpdateOptions: (SearchServiceOptions) -> Unit
 ) {
     when (options) {
+        is SearchServiceOptions.DeepSeekOptions -> SimpleSearchApiKey(options.apiKey) {
+            onUpdateOptions(options.copy(apiKey = it))
+        }
+        is SearchServiceOptions.SerperOptions -> SimpleSearchApiKey(options.apiKey) {
+            onUpdateOptions(options.copy(apiKey = it))
+        }
+        is SearchServiceOptions.DoubaoOptions -> {
+            SimpleSearchApiKey(options.apiKey) { onUpdateOptions(options.copy(apiKey = it)) }
+            Row {
+                me.rerere.search.DoubaoSearchMode.entries.forEach { mode ->
+                    androidx.compose.material3.FilterChip(
+                        selected = options.mode == mode,
+                        onClick = { onUpdateOptions(options.copy(mode = mode)) },
+                        label = { Text(if (mode == me.rerere.search.DoubaoSearchMode.GLOBAL) "全网搜索" else "自定义搜索") },
+                    )
+                }
+            }
+        }
         is SearchServiceOptions.TavilyOptions -> {
             TavilyOptions(options) { onUpdateOptions(it) }
         }
@@ -976,5 +994,12 @@ internal fun CustomJsOptions(
             ),
             textStyle = MaterialTheme.typography.bodySmall.merge(fontFamily = JetbrainsMono),
         )
+    }
+}
+
+@Composable
+private fun SimpleSearchApiKey(value: String, onChange: (String) -> Unit) {
+    FormItem(label = { Text(stringResource(R.string.search_detail_api_key)) }) {
+        OutlinedTextField(value = value, onValueChange = onChange, modifier = Modifier.fillMaxWidth())
     }
 }

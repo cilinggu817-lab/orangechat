@@ -44,6 +44,10 @@ import androidx.compose.material3.adaptive.currentWindowDpSize
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.platform.LocalUriHandler
+import me.rerere.rikkahub.ui.components.workspace.LocalWorkspaceDownloadHandler
+import me.rerere.rikkahub.ui.components.workspace.rememberWorkspaceDownloadHandler
+import me.rerere.rikkahub.data.datastore.getAssistantById
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -347,6 +351,9 @@ private fun ChatPageContent(
     val toaster = LocalToaster.current
     var previewMode by rememberSaveable { mutableStateOf(false) }
 
+    val workspaceHandler = rememberWorkspaceDownloadHandler(
+        setting.getAssistantById(conversation.assistantId)?.workspaceId?.toString()
+    )
     TTSAutoPlay(vm = vm, setting = setting, conversation = conversation)
 
     // 原生实时模糊：GLASS + 界面实时渲染 + API 31+
@@ -494,6 +501,8 @@ private fun ChatPageContent(
                 ),
         ) {
         CompositionLocalProvider(
+            LocalUriHandler provides workspaceHandler,
+            LocalWorkspaceDownloadHandler provides workspaceHandler,
             LocalLiveBubbleBlur provides LiveBubbleBlurContext(
                 imageBitmap = if (enableLiveBubbleBlur) bubbleBlurBackgroundBitmap else null,
                 backgroundOriginInWindow = bubbleBlurBackgroundOrigin,

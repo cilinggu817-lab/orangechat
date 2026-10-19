@@ -622,6 +622,19 @@ private fun ModelSettingsForm(
                         )
 
                         if (model.type == ModelType.CHAT) {
+                            Text("语音输入")
+                            me.rerere.ai.provider.AudioInputMode.entries.forEach { mode ->
+                                androidx.compose.material3.FilterChip(
+                                    selected = model.audioInputMode == mode,
+                                    onClick = { onModelChange(model.copy(audioInputMode = mode)) },
+                                    label = { Text(when (mode) {
+                                        me.rerere.ai.provider.AudioInputMode.AUTO -> "自动（Gemini 直传）"
+                                        me.rerere.ai.provider.AudioInputMode.AUDIO -> "直接发送音频"
+                                        me.rerere.ai.provider.AudioInputMode.ASR -> "先语音转写"
+                                    }) },
+                                )
+                            }
+                            Text("直传支持 Google 原生及 OpenAI Chat Completions；兼容服务不接受音频时请选择转写。")
                             ModalAbilitySelector(
                                 abilities = model.abilities,
                                 onUpdateAbilities = {

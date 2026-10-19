@@ -40,9 +40,7 @@ import me.rerere.rikkahub.data.files.FilesManager
 import me.rerere.rikkahub.data.datastore.SettingsStore
 import me.rerere.rikkahub.data.service.DailySummaryService
 import me.rerere.rikkahub.data.service.DeviceEventAiTriggerService
-import me.rerere.rikkahub.data.service.DeviceEventTrackingService
 import me.rerere.rikkahub.data.service.ProactiveMessageService
-import me.rerere.rikkahub.data.service.SupabaseSyncService
 import me.rerere.rikkahub.data.sync.DatabaseBackupCoordinator
 import me.rerere.rikkahub.service.ChatService
 import me.rerere.rikkahub.service.WebServerService
@@ -129,11 +127,8 @@ class RikkaHubApp : Application() {
         // Reschedule proactive message alarm if enabled
         rescheduleProactiveMessageIfEnabled()
 
-        // Reschedule Supabase sync alarm if enabled
-        rescheduleSupabaseSyncIfEnabled()
-
-        // Start device event tracking (screen on/off realtime listener) if enabled
-        startDeviceEventTrackingIfEnabled()
+        runCatching { me.rerere.rikkahub.data.service.retireLegacyDeviceSync(this) }
+            .onFailure { Log.w(TAG, "Unable to retire legacy device uploader", it) }
 
         // Start workflow trigger registry (event-driven automation)
         startWorkflowTriggers()
@@ -206,18 +201,6 @@ class RikkaHubApp : Application() {
             }.onFailure {
                 Log.e(TAG, "rescheduleProactiveMessageIfEnabled failed", it)
             }
-        }
-    }
-
-    private fun rescheduleSupabaseSyncIfEnabled() {
-        SupabaseSyncService.rescheduleIfEnabled(this)
-    }
-
-    private fun startDeviceEventTrackingIfEnabled() {
-        runCatching {
-            DeviceEventTrackingService.startIfEnabled(this)
-        }.onFailure {
-            Log.e(TAG, "startDeviceEventTrackingIfEnabled failed", it)
         }
     }
 

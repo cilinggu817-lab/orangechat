@@ -104,6 +104,10 @@ import me.rerere.ai.provider.ModelAbility
 import me.rerere.ai.provider.ModelType
 import me.rerere.ai.ui.UIMessagePart
 import me.rerere.asr.ASRStatus
+import me.rerere.ai.provider.supportsDirectAudio
+import me.rerere.rikkahub.data.datastore.findProvider
+import me.rerere.rikkahub.ui.hooks.DirectAudioRecorder
+import androidx.compose.runtime.DisposableEffect
 import me.rerere.common.android.appTempFolder
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.Add01
@@ -222,7 +226,14 @@ fun ChatInput(
     val context = LocalContext.current
     val resources = LocalResources.current
     val filesManager: FilesManager = koinInject()
-    val asr = LocalASRState.current
+    val transcription = LocalASRState.current
+    val directRecorder = remember(context) { DirectAudioRecorder(context) }
+    DisposableEffect(directRecorder) { onDispose { directRecorder.cleanup() } }
+    var voiceMessageMode by remember { mutableStateOf(false) }
+    var recordingUsesAudio by remember { mutableStateOf(false) }
+    val selectedModel = settings.getCurrentChatModel()
+    val wantsDirectAudio = selectedModel?.supportsDirectAudio(selectedModel.findProvider(settings.providers)) == true
+    val asr = if (if (voiceMessageMode) recordingUsesAudio else wantsDirectAudio) directRecorder else transcription
     val asrState by asr.state.collectAsState()
     val voiceCallActiveId by VoiceCallService.activeConversationId.collectAsStateWithLifecycle()
     val isVoiceCallActive = voiceCallActiveId != null
@@ -234,12 +245,11 @@ fun ChatInput(
     val asrPermission = rememberPermissionState(PermissionRecordAudio)
     PermissionManager(permissionState = asrPermission)
     var asrBaseText by remember { mutableStateOf("") }
-    var voiceMessageMode by remember { mutableStateOf(false) }
-
     // Auto-start voice recording when entering from voice call notification
     LaunchedEffect(autoStartVoice) {
         if (autoStartVoice && asrState.status == ASRStatus.Idle && asrState.isAvailable) {
             if (asrPermission.allRequiredPermissionsGranted) {
+                recordingUsesAudio = wantsDirectAudio
                 voiceMessageMode = true
                 asr.start { }
             } else {
@@ -745,6 +755,7 @@ fun ChatInput(
                                                     if (!asrPermission.allRequiredPermissionsGranted) {
                                                         asrPermission.requestPermissions()
                                                     } else {
+                                                        recordingUsesAudio = wantsDirectAudio
                                                         voiceMessageMode = true
                                                         asr.start { transcript ->
                                                             // Ignore transcript in voice message mode
@@ -764,7 +775,7 @@ fun ChatInput(
                                         } else {
                                             Icon(
                                                 imageVector = HugeIcons.Voice,
-                                                contentDescription = "Voice",
+                                                contentDescription = if (wantsDirectAudio) "录音直传（最长 5 分钟）" else "语音转写",
                                                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
                                                 modifier = Modifier.size(18.dp)
                                             )
