@@ -115,7 +115,7 @@ fun UIMessagePart.Audio.encodeBase64(withPrefix: Boolean = true): Result<String>
             val filePath =
                 this.url.toUri().path ?: throw IllegalArgumentException("Invalid file URI: ${this.url}")
             val file = File(filePath)
-            if (!file.exists()) {
+            if (!file.isFile || file.length() == 0L) {
                 throw IllegalArgumentException("File does not exist: ${this.url}")
             }
             val encoded = file.encodeToBase64Streaming()

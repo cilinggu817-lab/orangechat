@@ -72,10 +72,20 @@ internal fun rememberWorkspaceDownloadHandler(workspaceId: String?): UriHandler 
                         // Capture the workspace now: changing conversations while SAF is open must not redirect the export.
                         pendingWorkspace = workspaceId
                         pendingPath = path
-                        runCatching { launcher.launch(path.substringAfterLast('/')) }.onFailure {
-                            pendingWorkspace = null
-                            pendingPath = null
-                            toaster.show(message = "无法打开系统文件保存窗口")
+                        scope.launch {
+                            try {
+                                // Check existence/canonical containment before creating a destination document.
+                                repository.fileSize(workspaceId, WorkspaceStorageArea.FILES, path)
+                                launcher.launch(path.substringAfterLast('/'))
+                            } catch (e: CancellationException) {
+                                pendingWorkspace = null
+                                pendingPath = null
+                                throw e
+                            } catch (e: Exception) {
+                                pendingWorkspace = null
+                                pendingPath = null
+                                toaster.show(message = "无法保存此文件：${e.message}")
+                            }
                         }
                     }
                 }

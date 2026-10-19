@@ -77,6 +77,7 @@ fun Model.supportsDirectAudio(provider: ProviderSetting?): Boolean {
     val transportSupportsAudio = provider is ProviderSetting.Google ||
         (provider is ProviderSetting.OpenAI && !provider.useResponseApi)
     if (!transportSupportsAudio) return false
-    return audioInputMode == AudioInputMode.AUDIO ||
-        Regex("(^|[/ :])gemini[-_]").containsMatchIn(modelId.lowercase())
+    if (audioInputMode == AudioInputMode.AUDIO) return true
+    if (listOf("embedding", "image", "tts", "live").any { it in modelId.lowercase() }) return false
+    return Regex("(^|[/ :])gemini[-_]").containsMatchIn(modelId.lowercase())
 }

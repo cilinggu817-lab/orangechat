@@ -738,7 +738,7 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
         }
 
         is UIMessagePart.Audio -> {
-            encodeBase64(false).getOrNull()?.let { base64Data ->
+            encodeBase64(false).getOrThrow().let { base64Data ->
                 buildJsonObject {
                     put("inlineData", buildJsonObject {
                         put("mimeType", audioMimeType())
