@@ -55,7 +55,7 @@ class WorkspaceFileExportTest {
         val failure = runCatching {
             exportNewWorkspaceDocument(context.contentResolver, tree, "report.zip", 8) { it.write(1) }
         }.exceptionOrNull()
-        assertNotNull(failure)
+        assertEquals("文件写入不完整，请重试", failure?.message)
         assertTrue(provider.files.isEmpty())
     }
 
@@ -79,7 +79,7 @@ class WorkspaceFileExportTest {
         val failure = runCatching {
             exportNewWorkspaceDocument(context.contentResolver, tree, "report.zip", 0) { wrote = true }
         }.exceptionOrNull()
-        assertNotNull(failure)
+        assertEquals("文件服务返回了已有文件，已停止以防覆盖", failure?.message)
         assertFalse(wrote)
         assertEquals("original", provider.files.getValue("report.zip").readText())
     }

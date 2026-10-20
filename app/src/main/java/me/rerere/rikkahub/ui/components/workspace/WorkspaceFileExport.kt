@@ -30,7 +30,7 @@ internal suspend fun exportNewWorkspaceDocument(
     val existingIds = mutableSetOf<String>()
     val existingNames = mutableSetOf<String>()
     val columns = arrayOf(DocumentsContract.Document.COLUMN_DOCUMENT_ID, DocumentsContract.Document.COLUMN_DISPLAY_NAME)
-    checkNotNull(resolver.query(children, columns, null, null, null)) { "无法读取目标文件夹" }.use { cursor ->
+    checkNotNull(resolver.query(children, columns, android.os.Bundle.EMPTY, null)) { "无法读取目标文件夹" }.use { cursor ->
         while (cursor.moveToNext()) {
             existingIds += cursor.getString(0)
             existingNames += cursor.getString(1)
