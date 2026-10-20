@@ -1833,10 +1833,10 @@ class ChatService(
             try {
                 for (id in ids) {
                     val entity = filesManager.get(id) ?: continue
-                    if (filesManager.delete(id)) {
-                        deleted++
-                        deletedNames += filesManager.getFile(entity).name
-                    }
+                    // Record the candidate before deleting. Navigation cancellation must not
+                    // interrupt the disk -> DB transition or skip unlinking its references.
+                    deletedNames += filesManager.getFile(entity).name
+                    if (withContext(NonCancellable) { filesManager.delete(id) }) deleted++
                 }
             } finally {
                 // Once bytes are deleted, finish unlinking even if the user leaves this page.
