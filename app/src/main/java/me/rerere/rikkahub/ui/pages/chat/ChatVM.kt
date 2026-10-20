@@ -21,6 +21,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -33,7 +34,7 @@ import me.rerere.ai.ui.isEmptyInputMessage
 import me.rerere.rikkahub.R
 import me.rerere.rikkahub.data.datastore.Settings
 import me.rerere.rikkahub.data.datastore.SettingsStore
-import me.rerere.rikkahub.data.datastore.getCurrentChatModel
+import me.rerere.rikkahub.data.datastore.getChatModelForAssistant
 import me.rerere.rikkahub.data.datastore.withAssistantEdit
 import me.rerere.rikkahub.data.datastore.withSettingsEdit
 import me.rerere.rikkahub.data.files.FilesManager
@@ -144,8 +145,8 @@ class ChatVM(
     }.stateIn(viewModelScope, SharingStarted.Eagerly, false)
 
     // 当前模型
-    val currentChatModel = settings.map { settings ->
-        settings.getCurrentChatModel()
+    val currentChatModel = combine(settings, conversation) { settings, conversation ->
+        settings.getChatModelForAssistant(conversation.assistantId)
     }.stateIn(viewModelScope, SharingStarted.Lazily, null)
 
     // 错误状态

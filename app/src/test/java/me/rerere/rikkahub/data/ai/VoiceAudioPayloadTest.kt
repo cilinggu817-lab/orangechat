@@ -4,6 +4,17 @@ import android.app.Application
 import android.net.Uri
 import android.util.Base64
 import kotlinx.serialization.json.*
+import kotlinx.coroutines.runBlocking
+import me.rerere.rikkahub.data.ai.transformers.TransformerContext
+import me.rerere.rikkahub.data.ai.transformers.VoiceMessageTransformer
+import me.rerere.rikkahub.data.datastore.Settings
+import me.rerere.rikkahub.data.datastore.getChatModelForAssistant
+import me.rerere.rikkahub.data.datastore.findProvider
+import me.rerere.rikkahub.data.model.Assistant
+import me.rerere.rikkahub.ui.hooks.recordedVoicePart
+import me.rerere.rikkahub.ui.hooks.completedRecordingAfter
+import me.rerere.asr.ASRState
+import me.rerere.asr.ASRStatus
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.provider.*
 import me.rerere.ai.provider.providers.GoogleProvider
@@ -35,13 +46,69 @@ class VoiceAudioPayloadTest {
             .supportsDirectAudio(ProviderSetting.OpenAI()))
     }
 
-    @Test fun wavBytesSurviveOpenAiAndGoogleMessageSerialization() {
+    @Test fun conversationModelWinsOverGlobalAssistantAndRespectsProviderOverrides() {
+        val textModel = Model(modelId = "text-model")
+        val audioModel = Model(modelId = "proxy-gemini-3.8-flash-high")
+        val textAssistant = Assistant(chatModelId = textModel.id)
+        val audioAssistant = Assistant(chatModelId = audioModel.id)
+        val settings = Settings.dummy().copy(
+            assistants = listOf(textAssistant, audioAssistant), assistantId = textAssistant.id,
+            chatModelId = textModel.id,
+            providers = listOf(ProviderSetting.OpenAI(models = listOf(textModel, audioModel))),
+        )
+        val selected = requireNotNull(settings.getChatModelForAssistant(audioAssistant.id))
+        assertEquals(audioModel, selected)
+        assertTrue(selected.supportsDirectAudio(selected.findProvider(settings.providers)))
+        val override = audioModel.copy(providerOverwrite = ProviderSetting.Google())
+        val overriddenSettings = settings.copy(providers = listOf(
+            ProviderSetting.OpenAI(models = listOf(override), useResponseApi = true)))
+        assertTrue(override.supportsDirectAudio(override.findProvider(overriddenSettings.providers)))
+        assertFalse(Model(modelId = "notgemini-model").supportsDirectAudio(ProviderSetting.OpenAI()))
+        assertFalse(Model(modelId = "gemini-image").supportsDirectAudio(ProviderSetting.Google()))
+    }
+
+    @Test fun completionWaitsForIdleAndNeverReusesThePreviousRecording() {
+        val previous = "/voice/old.wav"
+        val next = "/voice/new.wav"
+        assertNull(ASRState(audioFilePath = previous).completedRecordingAfter(previous))
+        val saving = ASRState(status = ASRStatus.Stopping, audioFilePath = next)
+        assertNull(saving.completedRecordingAfter(previous))
+        assertEquals(next, saving.copy(status = ASRStatus.Idle).completedRecordingAfter(previous))
+    }
+
+    @Test fun asrModePreservesTranscriptWhileDirectRecordingsStayAudio() = runBlocking {
+        val model = Model(modelId = "gemini-3.8-flash-high", audioInputMode = AudioInputMode.ASR)
+        val settings = Settings.dummy().copy(providers = listOf(ProviderSetting.OpenAI(models = listOf(model))))
+        val ctx = TransformerContext(RuntimeEnvironment.getApplication(), model, Assistant(), settings)
+        val asr = recordedVoicePart("/voice.wav", 5000, "transcribed words", sendAudio = false)
+        val transformed = VoiceMessageTransformer.transform(ctx, listOf(UIMessage.user("").copy(parts = listOf(asr))))
+        assertEquals("transcribed words", transformed.single().toText())
+        val direct = recordedVoicePart("/voice.wav", 5000, "ignored transcript", sendAudio = true)
+        assertTrue(direct is UIMessagePart.Audio)
+        // Like an uploaded MP3, a direct recording never silently becomes a transcript later.
+        assertEquals(direct, VoiceMessageTransformer.transform(ctx,
+            listOf(UIMessage.user("").copy(parts = listOf(direct)))).single().parts.single())
+    }
+
+    @Test fun wavBytesSurviveOpenAiAndGoogleMessageSerialization() = runBlocking {
         val bytes = DirectAudioRecorder.wavHeader(4) + byteArrayOf(0, 0, 1, 0)
         val file = File.createTempFile("voice", ".wav", RuntimeEnvironment.getApplication().cacheDir)
         try {
             file.writeBytes(bytes)
-            val message = UIMessage(role = MessageRole.USER, parts = listOf(
+            val model = Model(modelId = "gemini-3.8-flash-high")
+            val provider = ProviderSetting.OpenAI(models = listOf(model))
+            val settings = Settings.dummy().copy(providers = listOf(provider))
+            val ctx = TransformerContext(RuntimeEnvironment.getApplication(), model, Assistant(), settings)
+            val recorded = recordedVoicePart(file.absolutePath, 5000, "must not replace audio", sendAudio = true)
+            val input = UIMessage(role = MessageRole.USER, parts = listOf(
+                UIMessagePart.Text("听听这段音频"), recorded))
+            val message = VoiceMessageTransformer.transform(ctx, listOf(input)).single()
+            val uploaded = input.copy(parts = listOf(
                 UIMessagePart.Text("听听这段音频"), UIMessagePart.Audio(Uri.fromFile(file).toString())))
+            assertEquals(uploaded, message)
+            val legacy = input.copy(parts = listOf(UIMessagePart.VoiceMessage(
+                url = file.absolutePath, duration = 5000, transcript = "must not replace audio")))
+            assertEquals(recorded, VoiceMessageTransformer.transform(ctx, listOf(legacy)).single().parts.single())
             val openai = ChatCompletionsAPI(OkHttpClient(), KeyRoulette.default())
             val method = ChatCompletionsAPI::class.java.getDeclaredMethod("buildMessages", List::class.java, Model::class.java)
             method.isAccessible = true

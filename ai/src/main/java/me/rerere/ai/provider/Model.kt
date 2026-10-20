@@ -79,5 +79,5 @@ fun Model.supportsDirectAudio(provider: ProviderSetting?): Boolean {
     if (!transportSupportsAudio) return false
     if (audioInputMode == AudioInputMode.AUDIO) return true
     if (listOf("embedding", "image", "tts", "live").any { it in modelId.lowercase() }) return false
-    return Regex("(^|[/ :])gemini[-_]").containsMatchIn(modelId.lowercase())
+    return Regex("(^|[^a-z0-9])gemini[-_]").containsMatchIn(modelId.lowercase())
 }

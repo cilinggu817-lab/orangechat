@@ -4,6 +4,7 @@ import kotlinx.serialization.json.Json
 import me.rerere.ai.ui.ToolApprovalState
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
+import me.rerere.ai.ui.isEmptyUIMessage
 import me.rerere.rikkahub.data.ai.executionCheckpointState
 import me.rerere.rikkahub.data.ai.withExecutionCheckpoint
 import me.rerere.rikkahub.data.model.Conversation
@@ -65,6 +66,7 @@ class GenerationMessageSaveTest {
         for (old in listOf(tool, tool.withExecutionCheckpoint("started"))) {
             val after = before.withGenerationMessages(listOf(message.copy(parts = listOf(old))))
             assertEquals(completed, after.currentMessages.single().getTools().single())
+            assertFalse(after.currentMessages.single().parts.isEmptyUIMessage())
         }
     }
 

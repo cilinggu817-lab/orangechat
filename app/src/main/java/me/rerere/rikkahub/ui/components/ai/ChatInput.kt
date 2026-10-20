@@ -107,6 +107,7 @@ import me.rerere.asr.ASRStatus
 import me.rerere.ai.provider.supportsDirectAudio
 import me.rerere.rikkahub.data.datastore.findProvider
 import me.rerere.rikkahub.ui.hooks.DirectAudioRecorder
+import me.rerere.rikkahub.ui.hooks.completedRecordingAfter
 import androidx.compose.runtime.DisposableEffect
 import me.rerere.common.android.appTempFolder
 import me.rerere.hugeicons.HugeIcons
@@ -122,7 +123,8 @@ import me.rerere.rikkahub.data.ai.mcp.McpManager
 import me.rerere.rikkahub.data.datastore.DisplayMaterialMode
 import me.rerere.rikkahub.data.datastore.Settings
 import me.rerere.rikkahub.data.datastore.getCurrentAssistant
-import me.rerere.rikkahub.data.datastore.getCurrentChatModel
+import me.rerere.rikkahub.data.datastore.getChatModelForAssistant
+import me.rerere.rikkahub.data.datastore.getAssistantById
 import me.rerere.rikkahub.data.datastore.getQuickMessagesOfAssistant
 import me.rerere.rikkahub.data.files.FilesManager
 import me.rerere.rikkahub.data.model.Assistant
@@ -175,11 +177,11 @@ fun ChatInput(
     onSendClick: () -> Unit,
     onLongSendClick: () -> Unit,
     onStickerSend: (markdown: String) -> Unit,
-    onVoiceMessage: ((url: String, duration: Long, transcript: String) -> Unit)? = null,
+    onVoiceMessage: ((url: String, duration: Long, transcript: String, sendAudio: Boolean) -> Unit)? = null,
     autoStartVoice: Boolean = false,
 ) {
     val toaster = LocalToaster.current
-    val assistant = settings.getCurrentAssistant()
+    val assistant = settings.getAssistantById(conversation.assistantId) ?: settings.getCurrentAssistant()
     val hazeTintColor = MaterialTheme.colorScheme.surfaceContainerLow
     val materialMode = LocalMaterialMode.current
     val isScrollCaptureInProgress = LocalScrollCaptureInProgress.current
@@ -231,7 +233,8 @@ fun ChatInput(
     DisposableEffect(directRecorder) { onDispose { directRecorder.cleanup() } }
     var voiceMessageMode by remember(conversation.id) { mutableStateOf(false) }
     var recordingUsesAudio by remember(conversation.id) { mutableStateOf(false) }
-    val selectedModel = settings.getCurrentChatModel()
+    var previousRecordingPath by remember(conversation.id) { mutableStateOf<String?>(null) }
+    val selectedModel = settings.getChatModelForAssistant(conversation.assistantId)
     val wantsDirectAudio = selectedModel?.supportsDirectAudio(selectedModel.findProvider(settings.providers)) == true
     val asr = if (if (voiceMessageMode) recordingUsesAudio else wantsDirectAudio) directRecorder else transcription
     val asrState by asr.state.collectAsState()
@@ -245,13 +248,24 @@ fun ChatInput(
     val asrPermission = rememberPermissionState(PermissionRecordAudio)
     PermissionManager(permissionState = asrPermission)
     var asrBaseText by remember { mutableStateOf("") }
+    fun startVoiceRecording() {
+        val recorder = if (wantsDirectAudio) directRecorder else transcription
+        recordingUsesAudio = wantsDirectAudio
+        previousRecordingPath = recorder.state.value.audioFilePath
+        voiceMessageMode = true
+        try {
+            recorder.start { }
+        } catch (error: Exception) {
+            voiceMessageMode = false
+            toaster.show(message = error.message ?: "无法开始录音", type = ToastType.Error)
+        }
+    }
+
     // Auto-start voice recording when entering from voice call notification
     LaunchedEffect(autoStartVoice) {
         if (autoStartVoice && asrState.status == ASRStatus.Idle && asrState.isAvailable) {
             if (asrPermission.allRequiredPermissionsGranted) {
-                recordingUsesAudio = wantsDirectAudio
-                voiceMessageMode = true
-                asr.start { }
+                startVoiceRecording()
             } else {
                 asrPermission.requestPermissions()
             }
@@ -281,14 +295,12 @@ fun ChatInput(
     }
 
     // Handle voice message completion
-    LaunchedEffect(asrState.audioFilePath, voiceMessageMode) {
-        if (voiceMessageMode && asrState.audioFilePath != null && asrState.status == ASRStatus.Idle) {
-            onVoiceMessage?.invoke(
-                asrState.audioFilePath!!,
-                asrState.durationMs,
-                asrState.transcript
-            )
+    LaunchedEffect(asrState.audioFilePath, asrState.status, voiceMessageMode) {
+        val path = asrState.completedRecordingAfter(previousRecordingPath)
+        if (voiceMessageMode && path != null) {
+            // Consume before sending; a stale Idle state from the previous recording must not be resent.
             voiceMessageMode = false
+            onVoiceMessage?.invoke(path, asrState.durationMs, asrState.transcript, recordingUsesAudio)
         }
     }
 
@@ -647,6 +659,19 @@ fun ChatInput(
                             MediaFileInputRow(state = state)
                         }
 
+                        if (voiceMessageMode) {
+                            Text(
+                                text = when (asrState.status) {
+                                    ASRStatus.Connecting -> if (recordingUsesAudio) "正在打开麦克风…" else "正在连接语音转写…"
+                                    ASRStatus.Stopping -> if (recordingUsesAudio) "正在保存原音…" else "正在等待转写…"
+                                    else -> "${if (recordingUsesAudio) "原音录制" else "转写录音"} · ${asrState.durationMs / 1000} 秒，点击语音按钮发送"
+                                },
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(horizontal = 8.dp),
+                            )
+                        }
+
                         TextInputRow(
                             state = state,
                             onSendMessage = { sendMessage() }
@@ -682,7 +707,7 @@ fun ChatInput(
                                 // Search
                                 val enableSearchMsg = stringResource(R.string.web_search_enabled)
                                 val disableSearchMsg = stringResource(R.string.web_search_disabled)
-                                val chatModel = settings.getCurrentChatModel()
+                                val chatModel = settings.getChatModelForAssistant(conversation.assistantId)
                                 SearchPickerButton(
                                     enableSearch = enableSearch,
                                     settings = settings,
@@ -704,7 +729,7 @@ fun ChatInput(
                                 )
 
                                 // Reasoning
-                                val model = settings.getCurrentChatModel()
+                                val model = settings.getChatModelForAssistant(conversation.assistantId)
                                 if (model?.abilities?.contains(ModelAbility.REASONING) == true) {
                                     ReasoningButton(
                                         reasoningLevel = assistant.reasoningLevel,
@@ -755,11 +780,7 @@ fun ChatInput(
                                                     if (!asrPermission.allRequiredPermissionsGranted) {
                                                         asrPermission.requestPermissions()
                                                     } else {
-                                                        recordingUsesAudio = wantsDirectAudio
-                                                        voiceMessageMode = true
-                                                        asr.start { transcript ->
-                                                            // Ignore transcript in voice message mode
-                                                        }
+                                                        startVoiceRecording()
                                                     }
                                                 }
                                                 ASRStatus.Connecting, ASRStatus.Stopping -> {}

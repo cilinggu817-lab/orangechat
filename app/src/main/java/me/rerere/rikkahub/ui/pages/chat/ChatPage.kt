@@ -120,6 +120,7 @@ import me.rerere.rikkahub.ui.components.message.LocalLiveBubbleBlur
 import me.rerere.rikkahub.ui.context.LocalNavController
 import me.rerere.rikkahub.ui.context.LocalToaster
 import me.rerere.rikkahub.ui.context.Navigator
+import me.rerere.rikkahub.ui.hooks.recordedVoicePart
 import me.rerere.rikkahub.ui.hooks.ChatInputState
 import me.rerere.rikkahub.ui.hooks.EditStateContent
 import me.rerere.rikkahub.ui.hooks.useEditState
@@ -595,18 +596,14 @@ private fun ChatPageContent(
                             chatListState.requestScrollToItem(conversation.currentMessages.size + 5)
                         }
                     },
-                    onVoiceMessage = { url, duration, transcript ->
+                    onVoiceMessage = { url, duration, transcript, sendAudio ->
                         if (currentChatModel == null) {
                             toaster.show("请先选择模型", type = ToastType.Error)
                             return@ChatInput
                         }
                         vm.handleMessageSend(
                             listOf(
-                                UIMessagePart.VoiceMessage(
-                                    url = url,
-                                    duration = duration,
-                                    transcript = transcript,
-                                )
+                                recordedVoicePart(url, duration, transcript, sendAudio)
                             )
                         )
                         scope.launch {
@@ -628,7 +625,10 @@ private fun ChatPageContent(
                         inputState.clearInput()
                     },
                     onUpdateChatModel = {
-                        vm.setChatModel(assistant = setting.getCurrentAssistant(), model = it)
+                        vm.setChatModel(
+                            assistant = setting.getAssistantById(conversation.assistantId) ?: setting.getCurrentAssistant(),
+                            model = it,
+                        )
                     },
                     onUpdateAssistant = { updated ->
                         setting.assistants.find { it.id == updated.id }?.let { previous ->

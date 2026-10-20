@@ -1041,6 +1041,12 @@ fun Settings.getCurrentChatModel(): Model? {
     return findModelById(this.getCurrentAssistant().chatModelId ?: this.chatModelId)
 }
 
+/** The open conversation can belong to a different assistant from the global selection. */
+fun Settings.getChatModelForAssistant(assistantId: Uuid): Model? {
+    val assistant = getAssistantById(assistantId) ?: getCurrentAssistant()
+    return findModelById(assistant.chatModelId ?: chatModelId)
+}
+
 fun Settings.getCurrentAssistant(): Assistant {
     return this.assistants.find { it.id == assistantId } ?: this.assistants.first()
 }
