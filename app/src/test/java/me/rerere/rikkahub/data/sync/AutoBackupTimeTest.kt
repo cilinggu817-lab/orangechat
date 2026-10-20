@@ -4,6 +4,7 @@ import me.rerere.rikkahub.data.datastore.AutoBackupConfig
 import java.time.Instant
 import java.time.ZoneId
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotEquals
 import org.junit.Test
 
 class AutoBackupTimeTest {
@@ -46,4 +47,14 @@ class AutoBackupTimeTest {
         check("2026-10-20T17:00:00Z", "2026-10-20T19:00:00Z",
             AutoBackupConfig(lastSuccessTime = millis("2099-01-01T00:00:00Z")))
     }
+    @Test fun scheduleIdentitySurvivesRestartAndStatusChangesButTracksClockAndDestination() {
+        val zone = ZoneId.of("Asia/Shanghai")
+        val config = AutoBackupConfig(enabled = true, directoryUri = "content://folder")
+        val restored = config.copy(lastSuccessTime = 123, lastError = "temporary failure")
+        assertEquals(config.scheduleTag(zone), restored.scheduleTag(zone))
+        assertNotEquals(config.scheduleTag(zone), config.copy(backupMinute = 30).scheduleTag(zone))
+        assertNotEquals(config.scheduleTag(zone), config.copy(directoryUri = "content://other").scheduleTag(zone))
+        assertNotEquals(config.scheduleTag(zone), config.scheduleTag(ZoneId.of("UTC")))
+    }
+
 }

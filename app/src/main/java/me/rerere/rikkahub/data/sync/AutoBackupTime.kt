@@ -27,3 +27,11 @@ internal fun nextAutoBackupTime(
     while (!candidate.isAfter(now)) candidate = candidate.plusHours(hours)
     return candidate.toInstant().toEpochMilli()
 }
+
+/** Stable across process restarts; status-only edits must not postpone queued or overdue work. */
+internal fun AutoBackupConfig.scheduleTag(zone: ZoneId = ZoneId.systemDefault()): String {
+    val key = listOf(destination.name, directoryUri, intervalHours.toString(), backupHour.toString(),
+        backupMinute.toString(), wifiOnly.toString(), zone.id).joinToString("\u0000")
+    val digest = java.security.MessageDigest.getInstance("SHA-256").digest(key.toByteArray(Charsets.UTF_8))
+    return "auto-backup-clock:" + digest.joinToString("") { "%02x".format(it) }
+}

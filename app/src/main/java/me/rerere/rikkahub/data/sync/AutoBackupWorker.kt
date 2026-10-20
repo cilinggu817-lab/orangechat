@@ -43,7 +43,7 @@ object AutoBackupScheduler : KoinComponent {
             else -> NetworkType.CONNECTED
         }).build()
 
-    suspend fun schedule(context: Context) = scheduleMutex.withLock {
+    suspend fun schedule(context: Context, advanceClock: Boolean = false) = scheduleMutex.withLock {
         // Read after acquiring the lock so a completing worker cannot overwrite a newer UI setting.
         val config = get<SettingsStore>().settingsFlowRaw.first().autoBackupConfig
         val manager = WorkManager.getInstance(context)
@@ -52,8 +52,13 @@ object AutoBackupScheduler : KoinComponent {
             manager.cancelUniqueWork(IMMEDIATE).await()
             return@withLock
         }
+        val tag = config.scheduleTag()
+        if (!advanceClock && manager.getWorkInfosForUniqueWorkFlow(PERIODIC).first().any {
+                !it.state.isFinished && tag in it.tags
+            }) return@withLock
         manager.enqueueUniquePeriodicWork(PERIODIC, ExistingPeriodicWorkPolicy.UPDATE,
             PeriodicWorkRequestBuilder<AutoBackupWorker>(config.intervalHours.coerceIn(1, 8760), TimeUnit.HOURS)
+                .addTag(tag)
                 .setNextScheduleTimeOverride(nextAutoBackupTime(config))
                 .setConstraints(constraints(config)).build()).await()
     }
@@ -116,7 +121,7 @@ class AutoBackupWorker(context: Context, params: WorkerParameters) : CoroutineWo
         }
         if (scheduleNext) {
             try {
-                AutoBackupScheduler.schedule(applicationContext)
+                AutoBackupScheduler.schedule(applicationContext, advanceClock = true)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {

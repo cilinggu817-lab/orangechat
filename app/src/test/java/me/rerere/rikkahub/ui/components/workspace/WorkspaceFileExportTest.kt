@@ -23,7 +23,7 @@ import java.io.IOException
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [28], manifest = Config.NONE, application = Application::class)
 class WorkspaceFileExportTest {
-    private val context get() = RuntimeEnvironment.getApplication<Application>()
+    private val context get() = RuntimeEnvironment.getApplication()
     private lateinit var provider: ExportDocumentsProvider
     private val tree = DocumentsContract.buildTreeDocumentUri("export.test", "root")
 
@@ -100,7 +100,7 @@ class ExportDocumentsProvider : DocumentsProvider() {
     }
     override fun queryRoots(projection: Array<out String>?): Cursor = MatrixCursor(projection ?: emptyArray())
     override fun queryDocument(documentId: String, projection: Array<out String>?): Cursor =
-        queryChildDocuments("root", projection, null)
+        queryChildDocuments("root", projection, sortOrder = null)
     override fun queryChildDocuments(parentDocumentId: String, projection: Array<out String>?, sortOrder: String?): Cursor {
         val columns = projection ?: arrayOf(DocumentsContract.Document.COLUMN_DOCUMENT_ID,
             DocumentsContract.Document.COLUMN_DISPLAY_NAME)
