@@ -10,6 +10,8 @@ class AutoBackupConfigTest {
         assertFalse(config.enabled)
         assertEquals("", config.directoryUri)
         assertEquals(24L, config.intervalHours)
+        assertEquals(3, config.backupHour)
+        assertEquals(0, config.backupMinute)
     }
 
     @Test fun `status updates do not reset the periodic schedule`() {
@@ -17,6 +19,8 @@ class AutoBackupConfigTest {
         assertEquals(config.scheduleConfig(), config.copy(lastSuccessTime = 123, lastError = "error").scheduleConfig())
         assertNotEquals(config.scheduleConfig(), config.copy(intervalHours = 6).scheduleConfig())
         assertNotEquals(config.scheduleConfig(), config.copy(enabled = false).scheduleConfig())
+        assertNotEquals(config.scheduleConfig(), config.copy(backupHour = 4).scheduleConfig())
+        assertNotEquals(config.scheduleConfig(), config.copy(backupMinute = 30).scheduleConfig())
     }
 
     @Test fun `restoring never enables a schedule or reuses a folder grant from another device`() {
@@ -25,6 +29,8 @@ class AutoBackupConfigTest {
             destination = AutoBackupDestination.LOCAL,
             directoryUri = "content://old-device/backups",
             intervalHours = 72,
+            backupHour = 22,
+            backupMinute = 15,
             wifiOnly = false,
             lastSuccessTime = 123,
             lastError = "old failure",
@@ -38,6 +44,8 @@ class AutoBackupConfigTest {
         assertEquals(original.destination, restored.destination)
         assertEquals(original.intervalHours, restored.intervalHours)
         assertEquals(original.wifiOnly, restored.wifiOnly)
+        assertEquals(original.backupHour, restored.backupHour)
+        assertEquals(original.backupMinute, restored.backupMinute)
         assertTrue(original.enabled)
     }
 

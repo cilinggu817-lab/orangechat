@@ -11,6 +11,8 @@ data class AutoBackupConfig(
     val destination: AutoBackupDestination = AutoBackupDestination.LOCAL,
     val directoryUri: String = "",
     val intervalHours: Long = 24,
+    val backupHour: Int = 3,
+    val backupMinute: Int = 0,
     val wifiOnly: Boolean = true,
     val lastSuccessTime: Long = 0,
     val lastError: String = "",

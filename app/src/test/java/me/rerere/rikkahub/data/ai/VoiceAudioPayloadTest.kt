@@ -85,9 +85,52 @@ class VoiceAudioPayloadTest {
         assertEquals("transcribed words", transformed.single().toText())
         val direct = recordedVoicePart("/voice.wav", 5000, "ignored transcript", sendAudio = true)
         assertTrue(direct is UIMessagePart.Audio)
-        // Like an uploaded MP3, a direct recording never silently becomes a transcript later.
-        assertEquals(direct, VoiceMessageTransformer.transform(ctx,
-            listOf(UIMessage.user("").copy(parts = listOf(direct)))).single().parts.single())
+        // ASR-only requests disclose missing audio instead of sending unsupported input.
+        val adapted = VoiceMessageTransformer.transform(ctx,
+            listOf(UIMessage.user("").copy(parts = listOf(direct)))).single().parts.single()
+        assertTrue(adapted is UIMessagePart.Text)
+        assertTrue((adapted as UIMessagePart.Text).text.contains("没有转写文本"))
+    }
+
+    @Test fun switchingAwayFromGeminiDoesNotLetHistoricalAudioBlockNewText() = runBlocking {
+        val source = UIMessage.user("").copy(parts = listOf(
+            UIMessagePart.Audio("file:///old.m4a"),
+            UIMessagePart.Audio("file:///old.mp3"),
+            UIMessagePart.VoiceMessage("/old.m4a", 5000, "known transcript"),
+        ))
+        val next = UIMessage.user("继续聊天")
+        val model = Model(modelId = "claude-opus-5-5")
+        val settings = Settings.dummy().copy(providers = listOf(ProviderSetting.OpenAI(models = listOf(model))))
+        val ctx = TransformerContext(RuntimeEnvironment.getApplication(), model, Assistant(), settings)
+        val result = VoiceMessageTransformer.transform(ctx, listOf(source, next))
+        assertEquals(next, result[1])
+        assertTrue(result[0].parts.all { it is UIMessagePart.Text })
+        assertTrue(result[0].toText().contains("known transcript"))
+        assertTrue(source.parts[0] is UIMessagePart.Audio)
+        val api = ChatCompletionsAPI(OkHttpClient(), KeyRoulette.default())
+        val method = ChatCompletionsAPI::class.java.getDeclaredMethod("buildMessages", List::class.java, Model::class.java)
+        method.isAccessible = true
+        assertFalse((method.invoke(api, result, model) as JsonArray).toString().contains("input_audio"))
+    }
+
+    @Test fun unsupportedOpenAiFormatsFallbackButNativeGoogleKeepsOriginalAudio() = runBlocking {
+        val model = Model(modelId = "gemini-3.8-flash-high")
+        val original = UIMessage.user("").copy(parts = listOf(
+            UIMessagePart.Audio("file:///old.m4a"),
+            UIMessagePart.VoiceMessage("/old.ogg", 5000, "fallback transcript"),
+        ))
+        suspend fun transform(provider: ProviderSetting): UIMessage {
+            val settings = Settings.dummy().copy(providers = listOf(provider))
+            return VoiceMessageTransformer.transform(
+                TransformerContext(RuntimeEnvironment.getApplication(), model, Assistant(), settings), listOf(original)
+            ).single()
+        }
+        val openai = transform(ProviderSetting.OpenAI(models = listOf(model)))
+        assertTrue(openai.parts.all { it is UIMessagePart.Text })
+        assertEquals("fallback transcript", (openai.parts[1] as UIMessagePart.Text).text)
+        val google = transform(ProviderSetting.Google(models = listOf(model)))
+        assertEquals(original.parts[0], google.parts[0])
+        assertTrue(google.parts[1] is UIMessagePart.Audio)
     }
 
     @Test fun wavBytesSurviveOpenAiAndGoogleMessageSerialization() = runBlocking {

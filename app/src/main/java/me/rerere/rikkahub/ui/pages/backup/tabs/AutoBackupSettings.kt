@@ -1,5 +1,6 @@
 package me.rerere.rikkahub.ui.pages.backup.tabs
 
+import android.app.TimePickerDialog
 import android.content.Intent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -50,7 +51,7 @@ internal fun AutoBackupSettings(vm: BackupVM) {
     CardGroup(modifier = Modifier.fillMaxWidth(), title = { Text("自动备份") }, items = buildCardGroupItems {
         item(
             headlineContent = { Text("定时自动备份") },
-            supportingContent = { Text("由系统在后台执行，省电策略可能延迟运行。首次开启会安排一次备份。") },
+            supportingContent = { Text("由系统在后台按所选时间安排，省电策略可能延迟运行。") },
             trailingContent = {
                 Switch(checked = config.enabled, enabled = loaded && (ready || config.enabled),
                     onCheckedChange = { enabled -> vm.updateAutoBackupConfig { it.copy(enabled = enabled) } })
@@ -93,6 +94,22 @@ internal fun AutoBackupSettings(vm: BackupVM) {
                             onClick = { vm.updateAutoBackupConfig { it.copy(intervalHours = hours) } },
                             label = { Text("${hours}小时") })
                     }
+                }
+            },
+        )
+        item(
+            headlineContent = { Text("备份时间") },
+            supportingContent = {
+                Text(if (config.intervalHours == 6L) "以此时间为起点，每 6 小时一次"
+                    else "按本机时区，在备份日的此时间安排")
+            },
+            trailingContent = {
+                TextButton(enabled = loaded, onClick = {
+                    TimePickerDialog(context, { _, hour, minute ->
+                        vm.updateAutoBackupConfig { it.copy(backupHour = hour, backupMinute = minute) }
+                    }, config.backupHour.coerceIn(0, 23), config.backupMinute.coerceIn(0, 59), true).show()
+                }) {
+                    Text("%02d:%02d".format(config.backupHour.coerceIn(0, 23), config.backupMinute.coerceIn(0, 59)))
                 }
             },
         )

@@ -115,8 +115,8 @@ class RikkaHubApp : Application() {
             get<SettingsStore>().settingsFlowRaw
                 .map { it.autoBackupConfig.scheduleConfig() }
                 .distinctUntilChanged()
-                .collect { config ->
-                    runCatching { me.rerere.rikkahub.data.sync.AutoBackupScheduler.schedule(this@RikkaHubApp, config) }
+                .collect {
+                    runCatching { me.rerere.rikkahub.data.sync.AutoBackupScheduler.schedule(this@RikkaHubApp) }
                         .onFailure { Log.e(TAG, "Unable to schedule automatic backup", it) }
                 }
         }

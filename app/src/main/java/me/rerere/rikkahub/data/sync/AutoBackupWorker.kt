@@ -4,6 +4,7 @@ import android.content.Context
 import android.net.Uri
 import android.provider.DocumentsContract
 import androidx.core.net.toUri
+import androidx.work.await
 import androidx.work.Constraints
 import androidx.work.CoroutineWorker
 import androidx.work.ExistingPeriodicWorkPolicy
@@ -29,7 +30,8 @@ import org.koin.core.component.get
 import java.io.File
 import java.util.concurrent.TimeUnit
 
-object AutoBackupScheduler {
+object AutoBackupScheduler : KoinComponent {
+    private val scheduleMutex = Mutex()
     private const val PERIODIC = "orangechat-auto-backup"
     private const val IMMEDIATE = "orangechat-auto-backup-now"
 
@@ -41,16 +43,19 @@ object AutoBackupScheduler {
             else -> NetworkType.CONNECTED
         }).build()
 
-    fun schedule(context: Context, config: AutoBackupConfig) {
+    suspend fun schedule(context: Context) = scheduleMutex.withLock {
+        // Read after acquiring the lock so a completing worker cannot overwrite a newer UI setting.
+        val config = get<SettingsStore>().settingsFlowRaw.first().autoBackupConfig
         val manager = WorkManager.getInstance(context)
         if (!config.enabled) {
-            manager.cancelUniqueWork(PERIODIC)
-            manager.cancelUniqueWork(IMMEDIATE)
-            return
+            manager.cancelUniqueWork(PERIODIC).await()
+            manager.cancelUniqueWork(IMMEDIATE).await()
+            return@withLock
         }
         manager.enqueueUniquePeriodicWork(PERIODIC, ExistingPeriodicWorkPolicy.UPDATE,
-            PeriodicWorkRequestBuilder<AutoBackupWorker>(config.intervalHours.coerceAtLeast(1), TimeUnit.HOURS)
-                .setConstraints(constraints(config)).build())
+            PeriodicWorkRequestBuilder<AutoBackupWorker>(config.intervalHours.coerceIn(1, 8760), TimeUnit.HOURS)
+                .setNextScheduleTimeOverride(nextAutoBackupTime(config))
+                .setConstraints(constraints(config)).build()).await()
     }
 
     fun runNow(context: Context, config: AutoBackupConfig) {
@@ -67,7 +72,8 @@ class AutoBackupWorker(context: Context, params: WorkerParameters) : CoroutineWo
         val settings = store.settingsFlow.first { !it.init }
         val config = settings.autoBackupConfig
         if (!config.enabled) return@withLock Result.success()
-        try {
+        var scheduleNext = false
+        val result = try {
             when (config.destination) {
                 AutoBackupDestination.LOCAL -> {
                     require(config.directoryUri.isNotBlank()) { "请选择本地备份文件夹" }
@@ -93,6 +99,7 @@ class AutoBackupWorker(context: Context, params: WorkerParameters) : CoroutineWo
                     backupReminderConfig = current.backupReminderConfig.copy(lastBackupTime = now),
                 )
             }
+            scheduleNext = true
             Result.success()
         } catch (e: CancellationException) {
             throw e
@@ -102,8 +109,21 @@ class AutoBackupWorker(context: Context, params: WorkerParameters) : CoroutineWo
                     current.autoBackupConfig.copy(lastError = "备份失败，请检查文件夹权限或远程配置（${e.javaClass.simpleName}）")
                     else current.autoBackupConfig)
             }
-            if (runAttemptCount < 3) Result.retry() else Result.failure()
+            if (runAttemptCount < 3) Result.retry() else {
+                scheduleNext = true
+                Result.failure()
+            }
         }
+        if (scheduleNext) {
+            try {
+                AutoBackupScheduler.schedule(applicationContext)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                android.util.Log.e("AutoBackupWorker", "Unable to schedule next backup", e)
+            }
+        }
+        result
     }
 
     private suspend fun writeLocalBackup(tree: Uri, zip: File) = withContext(Dispatchers.IO) {
