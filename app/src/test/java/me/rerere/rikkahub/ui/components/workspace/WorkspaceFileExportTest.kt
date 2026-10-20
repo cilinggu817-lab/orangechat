@@ -114,6 +114,8 @@ class ExportDocumentsProvider : DocumentsProvider() {
         seed(displayName, "")
         return displayName
     }
+    override fun isChildDocument(parentDocumentId: String, documentId: String) =
+        parentDocumentId == "root" && documentId in files
     override fun deleteDocument(documentId: String) { files.remove(documentId)?.delete() }
     override fun openDocument(documentId: String, mode: String, signal: CancellationSignal?): ParcelFileDescriptor =
         ParcelFileDescriptor.open(files.getValue(documentId), ParcelFileDescriptor.parseMode(mode))
