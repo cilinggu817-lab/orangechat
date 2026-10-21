@@ -72,6 +72,8 @@ import me.rerere.rikkahub.data.ai.withExecutionCheckpoint
 import me.rerere.rikkahub.utils.JsonInstant
 import me.rerere.rikkahub.data.ai.compressionTranscript
 import me.rerere.rikkahub.data.ai.compressTextChunks
+import me.rerere.rikkahub.data.ai.compressTextChunksWithProgress
+import me.rerere.rikkahub.data.ai.withCompressionDeadline
 import me.rerere.rikkahub.data.ai.planCompressionSummaryMerge
 import me.rerere.rikkahub.data.ai.mergeExistingSummaryDraft
 import me.rerere.ai.ui.finishPendingTools
@@ -1435,6 +1437,7 @@ class ChatService(
         targetTokens: Int,
         keepRecentMessages: Int = 32,
         mergeWithPrevious: Boolean = true,
+        onProgress: (String) -> Unit = {},
     ): Result<Unit> = runCatching {
         require(targetTokens > 0)
         require(conversation.id == conversationId)
@@ -1451,12 +1454,20 @@ class ChatService(
             .request(settings, base.assistantId, targetTokens, additionalPrompt)
         suspend fun compressContent(content: String): String = compressor(content)
 
-        val compressedSummary = compressTextChunks(sources.map { it.currentMessage.compressionTranscript() }, ::compressContent)
-        val mergePlan = base.planCompressionSummaryMerge(listOf(compressedSummary), mergeWithPrevious)
-        val textsToMerge = mergePlan.textsToMerge
-        val merged = if (textsToMerge.size == 1) textsToMerge.single() else
-            compressTextChunks(textsToMerge, ::compressContent)
-        val summaries = mergePlan.preservedSummaries + summaryParagraphs(merged)
+        val summaries = withCompressionDeadline {
+            val compressedSummary = compressTextChunksWithProgress(
+                sources.map { it.currentMessage.compressionTranscript() },
+                { onProgress("压缩聊天记录 · $it") }, ::compressContent,
+            )
+            val mergePlan = base.planCompressionSummaryMerge(listOf(compressedSummary), mergeWithPrevious)
+            val textsToMerge = mergePlan.textsToMerge
+            val merged = if (textsToMerge.size == 1) textsToMerge.single() else
+                compressTextChunksWithProgress(
+                    textsToMerge, { onProgress("合并往期摘要 · $it") }, ::compressContent,
+                )
+            mergePlan.preservedSummaries + summaryParagraphs(merged)
+        }
+        onProgress("正在保存摘要…")
         session.withStateLock {
             check(!session.isGenerating) { "对话正在生成，请停止后重新压缩" }
             val updated = session.state.value.withCompressionResult(base, sources, summaries)

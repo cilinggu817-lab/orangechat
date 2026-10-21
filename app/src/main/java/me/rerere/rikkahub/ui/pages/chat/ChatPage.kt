@@ -642,8 +642,8 @@ private fun ChatPageContent(
                             )
                         )
                     },
-                    onCompressContext = { additionalPrompt, targetTokens, keepRecentMessages, mergeWithPrevious ->
-                        vm.handleCompressContext(additionalPrompt, targetTokens, keepRecentMessages, mergeWithPrevious)
+                    onCompressContext = { additionalPrompt, targetTokens, keepRecentMessages, mergeWithPrevious, onProgress ->
+                        vm.handleCompressContext(additionalPrompt, targetTokens, keepRecentMessages, mergeWithPrevious, onProgress)
                     },
                 )
             },

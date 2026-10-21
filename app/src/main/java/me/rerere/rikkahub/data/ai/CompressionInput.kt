@@ -4,6 +4,8 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.sync.withPermit
 import me.rerere.ai.provider.Model
 import me.rerere.ai.ui.UIMessage
@@ -62,14 +64,34 @@ internal fun splitCompressionInput(texts: List<String>, maxChars: Int = COMPRESS
 internal suspend fun compressTextChunks(
     texts: List<String>,
     summarize: suspend (String) -> String,
+): String = compressTextChunksWithProgress(texts, {}, summarize)
+
+internal suspend fun compressTextChunksWithProgress(
+    texts: List<String>,
+    onProgress: (String) -> Unit,
+    summarize: suspend (String) -> String,
 ): String {
     var chunks = splitCompressionInput(texts)
     require(chunks.isNotEmpty()) { "没有可压缩的内容" }
     val semaphore = Semaphore(2)
     // Bound work if a provider ignores the length instruction or repeats its input.
-    repeat(4) {
+    repeat(4) { round ->
+        var completed = 0
+        val progressLock = Mutex()
+        onProgress("第 ${round + 1} 轮：已完成 $completed/${chunks.size} 批")
         val summaries = coroutineScope {
-            chunks.map { chunk -> async { semaphore.withPermit { summarize(chunk) } } }.awaitAll()
+            chunks.map { chunk ->
+                async {
+                    semaphore.withPermit {
+                        summarize(chunk).also {
+                            progressLock.withLock {
+                                completed++
+                                onProgress("第 ${round + 1} 轮：已完成 $completed/${chunks.size} 批")
+                            }
+                        }
+                    }
+                }
+            }.awaitAll()
         }
         check(summaries.all { it.isNotBlank() }) { "模型返回了空摘要，原文未修改" }
         if (summaries.size == 1) return summaries.single()

@@ -243,25 +243,22 @@ class ChatVM(
         }
     }
 
-    fun handleCompressContext(
+    suspend fun handleCompressContext(
         additionalPrompt: String,
         targetTokens: Int,
         keepRecentMessages: Int,
         mergeWithPrevious: Boolean = true,
-    ): Job {
-        return viewModelScope.launch {
-            chatService.compressConversation(
-                _conversationId,
-                conversation.value,
-                additionalPrompt,
-                targetTokens,
-                keepRecentMessages,
-                mergeWithPrevious,
-            ).onFailure {
-                chatService.addError(it, title = context.getString(R.string.error_title_compress_conversation))
-                throw kotlinx.coroutines.CancellationException("Compression failed", it)
-            }
-        }
+        onProgress: (String) -> Unit = {},
+    ) {
+        chatService.compressConversation(
+            _conversationId,
+            conversation.value,
+            additionalPrompt,
+            targetTokens,
+            keepRecentMessages,
+            mergeWithPrevious,
+            onProgress,
+        ).getOrThrow()
     }
 
     suspend fun forkMessage(message: UIMessage): Conversation {
