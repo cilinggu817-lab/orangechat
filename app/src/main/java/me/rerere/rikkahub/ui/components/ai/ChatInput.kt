@@ -103,6 +103,7 @@ import me.rerere.ai.provider.Model
 import me.rerere.ai.provider.ModelAbility
 import me.rerere.ai.provider.ModelType
 import me.rerere.ai.ui.UIMessagePart
+import me.rerere.asr.ASRState
 import me.rerere.asr.ASRStatus
 import me.rerere.ai.provider.supportsDirectAudio
 import me.rerere.rikkahub.data.datastore.findProvider
@@ -757,42 +758,27 @@ fun ChatInput(
                                 )
                             }
 
-                                // Voice button: click to record, click again to stop and send
-                                // 通话进行中禁用, 避免两路麦克风冲突
-                            if ((asrState.isAvailable || asrState.isRecording) && !isVoiceCallActive) {
-                                    ActionIconButton(
-                                        onClick = {
-                                            when (asrState.status) {
-                                                ASRStatus.Listening -> {
-                                                    asr.stop()
-                                                }
-                                                ASRStatus.Idle, ASRStatus.Error -> {
-                                                    if (!asrPermission.allRequiredPermissionsGranted) {
-                                                        asrPermission.requestPermissions()
-                                                    } else {
-                                                        startVoiceRecording()
-                                                    }
-                                                }
-                                                ASRStatus.Connecting, ASRStatus.Stopping -> {}
+                            VoiceInputButton(
+                                state = asrState,
+                                directAudio = wantsDirectAudio,
+                                callActive = isVoiceCallActive,
+                                onUnavailable = { message ->
+                                    toaster.show(message = message, type = ToastType.Normal)
+                                },
+                                onRecord = {
+                                    when (asrState.status) {
+                                        ASRStatus.Listening -> asr.stop()
+                                        ASRStatus.Idle, ASRStatus.Error -> {
+                                            if (!asrPermission.allRequiredPermissionsGranted) {
+                                                asrPermission.requestPermissions()
+                                            } else {
+                                                startVoiceRecording()
                                             }
                                         }
-                                    ) {
-                                        if (asrState.isRecording) {
-                                            androidx.compose.material3.CircularProgressIndicator(
-                                                modifier = Modifier.size(18.dp),
-                                                strokeWidth = 2.dp,
-                                                color = MaterialTheme.colorScheme.error,
-                                            )
-                                        } else {
-                                            Icon(
-                                                imageVector = HugeIcons.Voice,
-                                                contentDescription = if (wantsDirectAudio) "录音直传（最长 5 分钟）" else "语音转写",
-                                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                                modifier = Modifier.size(18.dp)
-                                            )
-                                        }
+                                        ASRStatus.Connecting, ASRStatus.Stopping -> {}
                                     }
-                            }
+                                },
+                            )
 
                             ActionIconButton(
                                     onClick = {
@@ -915,6 +901,43 @@ fun ChatInput(
                     }
                 }
             }
+        }
+    }
+}
+
+/** Keep the entry in place when changing models; explain unavailable input on tap. */
+@Composable
+internal fun VoiceInputButton(
+    state: ASRState,
+    directAudio: Boolean,
+    callActive: Boolean,
+    onUnavailable: (String) -> Unit,
+    onRecord: () -> Unit,
+) {
+    val unavailableReason = when {
+        callActive -> "语音通话进行中，请先挂断通话再录音"
+        !state.isAvailable && !state.isRecording ->
+            "当前模型需要语音转写，请在设置 → 语音服务中配置并选择有效的语音识别服务"
+        else -> null
+    }
+    ActionIconButton(onClick = {
+        if (unavailableReason != null) onUnavailable(unavailableReason) else onRecord()
+    }) {
+        if (state.isRecording) {
+            androidx.compose.material3.CircularProgressIndicator(
+                modifier = Modifier.size(18.dp),
+                strokeWidth = 2.dp,
+                color = MaterialTheme.colorScheme.error,
+            )
+        } else {
+            Icon(
+                imageVector = HugeIcons.Voice,
+                contentDescription = if (directAudio) "录音直传（最长 5 分钟）" else "语音转写",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(
+                    alpha = if (unavailableReason == null) 1f else 0.38f,
+                ),
+                modifier = Modifier.size(18.dp),
+            )
         }
     }
 }
