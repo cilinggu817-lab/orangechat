@@ -132,6 +132,9 @@ val appModule = module {
     }
 
     single {
+        // Defensive boundary for any new entry point that has not yet joined the startup gate.
+        val app = get<android.content.Context>().applicationContext as? me.rerere.rikkahub.RikkaHubApp
+        check(app?.startupRecovery?.blocksChatAccess != true) { "聊天恢复尚未结束" }
         ChatService(
             context = get(),
             appScope = get(),

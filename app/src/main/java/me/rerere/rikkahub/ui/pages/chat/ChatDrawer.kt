@@ -77,7 +77,8 @@ import coil3.request.ImageRequest
 import coil3.request.crossfade
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.distinctUntilChanged
-import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.ChartColumn
@@ -102,7 +103,6 @@ import me.rerere.rikkahub.data.datastore.Settings
 import me.rerere.rikkahub.data.model.Assistant
 import me.rerere.rikkahub.data.model.Conversation
 import me.rerere.rikkahub.data.model.Folder
-import me.rerere.rikkahub.data.repository.ConversationRepository
 import me.rerere.rikkahub.plugin.manager.PluginManager
 import me.rerere.rikkahub.plugin.model.PluginInfo
 import me.rerere.rikkahub.ui.components.ai.AssistantPicker
@@ -139,7 +139,7 @@ fun ChatDrawerContent(
     val resources = LocalResources.current
     val toaster = LocalToaster.current
     val isPlayStore = rememberIsPlayStoreVersion()
-    val repo = koinInject<ConversationRepository>()
+    var assistantSwitchJob by remember { mutableStateOf<Job?>(null) }
     val pluginManager = koinInject<PluginManager>()
     val plugins by pluginManager.plugins.collectAsStateWithLifecycle()
     val pagePlugins = plugins.filter { it.hasPageShortcut() }
@@ -414,17 +414,20 @@ fun ChatDrawerContent(
             AssistantPicker(
                 settings = settings,
                 onUpdateSettings = {
-                    vm.updateSettings(it)
-                    scope.launch {
-                        val id = if (context.readBooleanPreference("create_new_conversation_on_start", true)) {
-                            Uuid.random()
-                        } else {
-                            repo.getConversationsOfAssistant(it.assistantId)
-                                .first()
-                                .firstOrNull()
-                                ?.id ?: Uuid.random()
+                    val assistantId = it.assistantId
+                    assistantSwitchJob?.cancel()
+                    assistantSwitchJob = scope.launch {
+                        try {
+                            val id = vm.selectAssistant(
+                                assistantId = assistantId,
+                                createNew = context.readBooleanPreference("create_new_conversation_on_start", true),
+                            )
+                            navigateToChatPage(navigator = navController, chatId = id)
+                        } catch (e: CancellationException) {
+                            throw e
+                        } catch (e: Exception) {
+                            toaster.show(e.message ?: "Failed to switch assistant", type = ToastType.Error)
                         }
-                        navigateToChatPage(navigator = navController, chatId = id)
                     }
                 },
                 modifier = Modifier.fillMaxWidth(),

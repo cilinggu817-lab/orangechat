@@ -17,7 +17,7 @@ internal fun recordedVoicePart(
     transcript: String,
     sendAudio: Boolean,
 ): UIMessagePart = if (sendAudio) {
-    UIMessagePart.Audio(if (path.startsWith("/")) Uri.fromFile(File(path)).toString() else path)
+    UIMessagePart.Audio(if (File(path).isAbsolute) Uri.fromFile(File(path)).toString() else path)
 } else {
     UIMessagePart.VoiceMessage(url = path, duration = durationMs, transcript = transcript)
 }

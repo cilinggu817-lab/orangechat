@@ -43,8 +43,12 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
+import androidx.lifecycle.Lifecycle
 import me.rerere.rikkahub.R
 import me.rerere.rikkahub.ui.components.nav.BackButton
+import me.rerere.rikkahub.ui.context.LocalToaster
+import me.rerere.rikkahub.ui.components.ui.buildCardGroupItems
 import me.rerere.rikkahub.ui.components.ui.CardGroup
 import me.rerere.rikkahub.ui.components.ui.RiskConfirmDialog
 import me.rerere.rikkahub.ui.theme.CustomColors
@@ -64,6 +68,25 @@ import org.koin.compose.koinInject
 @Composable
 fun SettingProactiveMessagePage(vm: SettingVM = koinInject()) {
     val context = LocalContext.current
+    var hasExactAlarm by remember { mutableStateOf(ProactiveMessageWorker.canScheduleExactAlarms(context)) }
+    var ignoresBatteryOptimization by remember {
+        mutableStateOf(ProactiveMessageWorker.isIgnoringBatteryOptimizations(context))
+    }
+    var showBackgroundHelp by remember { mutableStateOf(false) }
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
+        hasExactAlarm = ProactiveMessageWorker.canScheduleExactAlarms(context)
+        ignoresBatteryOptimization = ProactiveMessageWorker.isIgnoringBatteryOptimizations(context)
+    }
+    val toaster = LocalToaster.current
+    fun openSystemSetting(action: String, fallback: String) {
+        val packageUri = Uri.fromParts("package", context.packageName, null)
+        runCatching { context.startActivity(Intent(action, packageUri)) }
+            .recoverCatching {
+                val intent = Intent(fallback)
+                if (fallback == Settings.ACTION_APPLICATION_DETAILS_SETTINGS) intent.data = packageUri
+                context.startActivity(intent)
+            }.onFailure { toaster.show("无法打开系统设置，请在系统设置中手动调整") }
+    }
     val settings by vm.settings.collectAsStateWithLifecycle()
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
     val conversationRepository: ConversationRepository = koinInject()
@@ -490,73 +513,41 @@ fun SettingProactiveMessagePage(vm: SettingVM = koinInject()) {
                     )
                 }
             }
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                item {
-                    val hasExactAlarm = ProactiveMessageWorker.canScheduleExactAlarms(context)
-                    CardGroup(modifier = Modifier.padding(horizontal = 8.dp)) {
+            item {
+                CardGroup(modifier = Modifier.padding(horizontal = 8.dp), title = { Text("后台运行") },
+                    items = buildCardGroupItems {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                         item(
                             headlineContent = { Text("精确闹钟权限") },
                             supportingContent = {
-                                if (hasExactAlarm) {
-                                    Text("已授予精确闹钟权限，定时触发将更准确")
-                                } else {
-                                    Text("未授予精确闹钟权限，触发时间可能不精确。已自动使用 WorkManager 作为备用方案。")
-                                }
+                                Text(if (hasExactAlarm) "已授予 · 定时触发更准确" else "未授予 · 已启用备用调度，可能延迟")
                             },
-                            onClick = if (!hasExactAlarm) {
-                                {
-                                    try {
-                                        val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
-                                            data = Uri.fromParts("package", context.packageName, null)
-                                        }
-                                        context.startActivity(intent)
-                                    } catch (e: Exception) {
-                                        val intent = Intent(Settings.ACTION_MANAGE_APPLICATIONS_SETTINGS)
-                                        context.startActivity(intent)
-                                    }
-                                }
-                            } else null
+                            onClick = if (hasExactAlarm) null else ({
+                                openSystemSetting(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM,
+                                    Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
+                            }),
                         )
                     }
-                }
-            }
-            item {
-                val isIgnoring = ProactiveMessageWorker.isIgnoringBatteryOptimizations(context)
-                CardGroup(modifier = Modifier.padding(horizontal = 8.dp)) {
                     item(
                         headlineContent = { Text("电池优化") },
                         supportingContent = {
-                            if (isIgnoring) {
-                                Text("已忽略电池优化，后台触发更稳定")
-                            } else {
-                                Text("未忽略电池优化，系统可能限制后台活动导致消息无法准时触发。建议关闭电池优化。")
-                            }
+                            Text(if (ignoresBatteryOptimization) "已忽略 · 后台触发更稳定" else "未忽略 · 系统可能限制后台触发")
                         },
-                        onClick = if (!isIgnoring) {
-                            {
-                                try {
-                                    val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
-                                        data = Uri.fromParts("package", context.packageName, null)
-                                    }
-                                    context.startActivity(intent)
-                                } catch (e: Exception) {
-                                    val intent = Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
-                                    context.startActivity(intent)
-                                }
-                            }
-                        } else null
+                        onClick = if (ignoresBatteryOptimization) null else ({
+                            openSystemSetting(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                                Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
+                        }),
                     )
-                }
-            }
-            item {
-                CardGroup(modifier = Modifier.padding(horizontal = 8.dp)) {
                     item(
-                        headlineContent = { Text("说明") },
-                        supportingContent = {
+                        headlineContent = { Text("后台活动说明") },
+                        supportingContent = if (showBackgroundHelp) ({
                             Text("等待和行动简记保存在本机，下一次聊天接续；发送过的消息保留在原对话。自动时间线默认关闭。后台触发仍受手机省电与权限限制。")
-                        },
+                        }) else null,
+                        trailingContent = { Text(if (showBackgroundHelp) "收起" else "展开",
+                            style = MaterialTheme.typography.labelMedium) },
+                        onClick = { showBackgroundHelp = !showBackgroundHelp },
                     )
-                }
+                })
             }
         }
     }

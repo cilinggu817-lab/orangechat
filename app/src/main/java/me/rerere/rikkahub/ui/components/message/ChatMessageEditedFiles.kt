@@ -6,6 +6,8 @@
 
 package me.rerere.rikkahub.ui.components.message
 
+import me.rerere.rikkahub.ui.components.workspace.WorkspaceDownloadFolderSetting
+
 import me.rerere.rikkahub.ui.components.workspace.rememberWorkspaceFileExporter
 import android.content.Intent
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -165,6 +167,7 @@ internal fun EditedFilesList(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
+                WorkspaceDownloadFolderSetting()
                 Card(
                     onClick = {
                         val p = selectedPath ?: return@Card

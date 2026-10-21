@@ -94,6 +94,11 @@ class DatabaseBackupCoordinator(
         }
     }
 
+    internal fun validateStagedRestore(file: File) {
+        check(file.isFile && file.length() > 0) { "Backup database is missing or empty" }
+        validateDatabase(file)
+    }
+
     companion object {
         private const val PENDING_DIR = "pending_database_restore"
         private const val READY_MARKER = ".ready"

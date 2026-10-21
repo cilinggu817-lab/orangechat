@@ -757,16 +757,6 @@ fun ChatInput(
                                 )
                             }
 
-                            ActionIconButton(
-                                    onClick = {
-                                        expandToggle(ExpandState.Files)
-                                    }) {
-                                    Icon(
-                                        imageVector = if (expand == ExpandState.Files) HugeIcons.Cancel01 else HugeIcons.Add01,
-                                        contentDescription = stringResource(R.string.more_options)
-                                    )
-                            }
-
                                 // Voice button: click to record, click again to stop and send
                                 // 通话进行中禁用, 避免两路麦克风冲突
                             if ((asrState.isAvailable || asrState.isRecording) && !isVoiceCallActive) {
@@ -802,6 +792,16 @@ fun ChatInput(
                                             )
                                         }
                                     }
+                            }
+
+                            ActionIconButton(
+                                    onClick = {
+                                        expandToggle(ExpandState.Files)
+                                    }) {
+                                    Icon(
+                                        imageVector = if (expand == ExpandState.Files) HugeIcons.Cancel01 else HugeIcons.Add01,
+                                        contentDescription = stringResource(R.string.more_options)
+                                    )
                             }
 
                             AnimatedVisibility(

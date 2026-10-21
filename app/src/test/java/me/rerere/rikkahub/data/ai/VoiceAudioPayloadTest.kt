@@ -23,6 +23,7 @@ import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
 import me.rerere.ai.util.KeyRoulette
 import me.rerere.rikkahub.ui.hooks.DirectAudioRecorder
+import me.rerere.rikkahub.testing.HostFileUriShadow
 import okhttp3.OkHttpClient
 import org.junit.Assert.*
 import org.junit.Test
@@ -33,7 +34,7 @@ import org.robolectric.annotation.Config
 import java.io.File
 
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [28], manifest = Config.NONE, application = Application::class)
+@Config(sdk = [28], manifest = Config.NONE, application = Application::class, shadows = [HostFileUriShadow::class])
 class VoiceAudioPayloadTest {
     @Test fun routesGeminiThroughBothTransportsButRespectsAsrOverride() {
         val model = Model(modelId = "google/gemini-2.5-flash")

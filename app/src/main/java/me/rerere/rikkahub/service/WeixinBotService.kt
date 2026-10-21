@@ -6,6 +6,7 @@
 
 package me.rerere.rikkahub.service
 
+import me.rerere.rikkahub.data.sync.isChatRecoveryBlocking
 import android.app.Notification
 import android.app.Service
 import android.content.Context
@@ -62,6 +63,11 @@ class WeixinBotService : Service(), org.koin.core.component.KoinComponent {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (isChatRecoveryBlocking()) {
+            stopSelf(startId)
+            return START_NOT_STICKY
+        }
+
         startForegroundCompat()
         if (pollJob == null || pollJob?.isActive != true) {
             pollJob = scope.launch { runPollLoop() }

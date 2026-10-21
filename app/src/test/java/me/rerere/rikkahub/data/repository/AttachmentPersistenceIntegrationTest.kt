@@ -30,6 +30,7 @@ import me.rerere.rikkahub.data.model.toMessageNode
 import me.rerere.rikkahub.service.ConversationMessageJournal
 import me.rerere.rikkahub.service.generationMessageMutation
 import me.rerere.rikkahub.utils.JsonInstant
+import me.rerere.rikkahub.testing.HostFileUriShadow
 import org.junit.Assert.*
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -39,7 +40,7 @@ import org.robolectric.annotation.Config
 import kotlin.uuid.Uuid
 
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [28], manifest = Config.NONE, application = Application::class)
+@Config(sdk = [28], manifest = Config.NONE, application = Application::class, shadows = [HostFileUriShadow::class])
 class AttachmentPersistenceIntegrationTest {
     @Test fun `manual deletion repairs only selected references without scanning unrelated corrupt images`() = runBlocking {
         fixture(forceSlices = true) { db, repository, files, _ ->

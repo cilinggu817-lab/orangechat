@@ -27,9 +27,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
-import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -73,10 +70,10 @@ import me.rerere.rikkahub.data.ai.hasDurableToolEvidence
 import me.rerere.rikkahub.data.ai.recoverInterruptedExecution
 import me.rerere.rikkahub.data.ai.withExecutionCheckpoint
 import me.rerere.rikkahub.utils.JsonInstant
+import me.rerere.rikkahub.data.ai.compressionTranscript
+import me.rerere.rikkahub.data.ai.compressTextChunks
 import me.rerere.rikkahub.data.ai.planCompressionSummaryMerge
 import me.rerere.rikkahub.data.ai.mergeExistingSummaryDraft
-import kotlinx.coroutines.sync.Semaphore
-import kotlinx.coroutines.sync.withPermit
 import me.rerere.ai.ui.finishPendingTools
 import me.rerere.ai.ui.finishReasoning
 import me.rerere.ai.ui.isEmptyInputMessage
@@ -1439,66 +1436,29 @@ class ChatService(
         keepRecentMessages: Int = 32,
         mergeWithPrevious: Boolean = true,
     ): Result<Unit> = runCatching {
-        val settings = settingsStore.settingsFlow.first()
-        val model = settings.findModelById(settings.compressModelId)
-            ?: settings.getCurrentChatModel()
-            ?: throw IllegalStateException("No model available for compression")
-        val provider = model.findProvider(settings.providers)
-            ?: throw IllegalStateException("Provider not found")
-
-        val providerHandler = providerManager.getProviderByType(provider)
-
+        require(targetTokens > 0)
         require(conversation.id == conversationId)
         val session = getOrCreateSession(conversationId)
+        check(!session.isGenerating) { "请先停止生成再压缩对话" }
         val base = session.state.value
         val sources = base.compressionCandidates(keepRecentMessages)
         if (sources.isEmpty()) throw IllegalStateException(context.getString(R.string.chat_page_compress_not_enough_messages))
-        val messagesToCompress = sources.map { it.currentMessage }
-        val maxMessagesPerChunk = 256
-
-        fun splitMessages(messages: List<UIMessage>): List<List<UIMessage>> {
-            if (messages.size <= maxMessagesPerChunk) return listOf(messages)
-            val mid = messages.size / 2
-            val left = splitMessages(messages.subList(0, mid))
-            val right = splitMessages(messages.subList(mid, messages.size))
-            return left + right
+        check(sources.none { node -> node.currentMessage.getTools().any { it.isPending || it.canResumeExecution } }) {
+            "请先处理待执行的工具调用再压缩对话"
         }
+        val settings = settingsStore.settingsFlow.first()
+        val compressor = me.rerere.rikkahub.data.ai.CompressionEngine(providerManager)
+            .request(settings, base.assistantId, targetTokens, additionalPrompt)
+        suspend fun compressContent(content: String): String = compressor(content)
 
-        suspend fun compressMessages(messages: List<UIMessage>): String {
-            val contentToCompress = messages.joinToString("\n\n") { it.summaryAsText() }
-            val prompt = settings.compressPrompt.applyPlaceholders(
-                "content" to contentToCompress,
-                "target_tokens" to targetTokens.toString(),
-                "additional_context" to if (additionalPrompt.isNotBlank()) {
-                    "Additional instructions from user: $additionalPrompt"
-                } else "",
-                "locale" to Locale.getDefault().displayName
-            )
-
-            val result = providerHandler.generateText(
-                providerSetting = provider,
-                messages = listOf(UIMessage.user(prompt)),
-                params = TextGenerationParams(
-                    model = model,
-                ),
-            )
-
-            return result.choices.firstOrNull()?.message?.toText()?.trim()?.takeIf { it.isNotBlank() }
-                ?: throw IllegalStateException("Failed to generate compressed summary")
-        }
-
-        val semaphore = Semaphore(2)
-        val compressedSummaries = coroutineScope {
-            splitMessages(messagesToCompress)
-                .map { chunk -> async { semaphore.withPermit { compressMessages(chunk) } } }
-                .awaitAll()
-        }
-        val mergePlan = base.planCompressionSummaryMerge(compressedSummaries, mergeWithPrevious)
+        val compressedSummary = compressTextChunks(sources.map { it.currentMessage.compressionTranscript() }, ::compressContent)
+        val mergePlan = base.planCompressionSummaryMerge(listOf(compressedSummary), mergeWithPrevious)
         val textsToMerge = mergePlan.textsToMerge
         val merged = if (textsToMerge.size == 1) textsToMerge.single() else
-            compressMessages(textsToMerge.map { UIMessage.user(it) })
+            compressTextChunks(textsToMerge, ::compressContent)
         val summaries = mergePlan.preservedSummaries + summaryParagraphs(merged)
         session.withStateLock {
+            check(!session.isGenerating) { "对话正在生成，请停止后重新压缩" }
             val updated = session.state.value.withCompressionResult(base, sources, summaries)
             saveConversationLocked(conversationId, updated)
         }
@@ -1519,26 +1479,9 @@ class ChatService(
         check(session.state.value.compressionRevision == revision) { "摘要已变更，请关闭后重新打开。" }
         val draft = mergeExistingSummaryDraft(summaries, enabled) { content ->
             val settings = settingsStore.settingsFlow.first()
-            val model = settings.findModelById(settings.compressModelId)
-                ?: settings.getCurrentChatModel()
-                ?: throw IllegalStateException("No model available for compression")
-            val provider = model.findProvider(settings.providers)
-                ?: throw IllegalStateException("Provider not found")
-            val prompt = settings.compressPrompt.applyPlaceholders(
-                "content" to content,
-                "target_tokens" to targetTokens.toString(),
-                "additional_context" to if (additionalPrompt.isNotBlank()) {
-                    "Additional instructions from user: $additionalPrompt"
-                } else "",
-                "locale" to Locale.getDefault().displayName,
-            )
-            val result = providerManager.getProviderByType(provider).generateText(
-                providerSetting = provider,
-                messages = listOf(UIMessage.user(prompt)),
-                params = TextGenerationParams(model = model),
-            )
-            result.choices.firstOrNull()?.message?.toText()
-                ?: throw IllegalStateException("Failed to merge summaries")
+            val compressor = me.rerere.rikkahub.data.ai.CompressionEngine(providerManager)
+                .request(settings, session.state.value.assistantId, targetTokens, additionalPrompt)
+            compressTextChunks(listOf(content), compressor)
         }
         check(session.state.value.compressionRevision == revision) { "摘要已变更，请关闭后重新打开。" }
         // Preview only. The existing Save action applies edits under the session lock.

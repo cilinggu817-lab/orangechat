@@ -686,7 +686,7 @@ private fun ChainOfThoughtScope.ExportedReasoningStep(
             Icon(
                 painter = painterResource(R.drawable.ic_thinking_watermelon),
                 contentDescription = null,
-                modifier = Modifier.size(16.dp),
+                modifier = Modifier.size(18.dp),
                 tint = MaterialTheme.colorScheme.secondary
             )
         },

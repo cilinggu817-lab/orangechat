@@ -42,6 +42,7 @@ import me.rerere.rikkahub.data.service.DailySummaryService
 import me.rerere.rikkahub.data.service.DeviceEventAiTriggerService
 import me.rerere.rikkahub.data.service.ProactiveMessageService
 import me.rerere.rikkahub.data.sync.DatabaseBackupCoordinator
+import me.rerere.rikkahub.data.sync.BackupRestoreTransaction
 import me.rerere.rikkahub.service.ChatService
 import me.rerere.rikkahub.service.WebServerService
 import me.rerere.rikkahub.utils.CrashHandler
@@ -64,6 +65,8 @@ const val VOICE_CALL_NOTIFICATION_CHANNEL_ID = "voice_call"
 const val ANNOUNCEMENT_NOTIFICATION_CHANNEL_ID = "announcement"
 
 class RikkaHubApp : Application() {
+    internal var startupRecovery: me.rerere.rikkahub.data.sync.StartupRecovery? = null
+        private set
     companion object {
         var INSTANCE: RikkaHubApp? = null
             private set
@@ -72,19 +75,60 @@ class RikkaHubApp : Application() {
     override fun onCreate() {
         super.onCreate()
         INSTANCE = this
+        me.rerere.rikkahub.data.sync.StartupRecoveryDiagnostics.beginLaunch(this)
+        // Must precede Room and DataStore creation. Failed recovery must not open mixed app data.
+        BackupRestoreTransaction.recoverBeforeStartup(dataDir)?.let {
+            Log.e(TAG, "Backup activation failed; original files and preferences recovered", it)
+        }
         runCatching { DatabaseBackupCoordinator.applyPendingRestore(this) }
             .onFailure { Log.e(TAG, "Failed to apply pending database restore", it) }
-        startKoin {
+        // Capture startup failures too, and configure large-row reads before opening Room.
+        CrashHandler.install(this)
+        DatabaseUtil.setCursorWindowSize(32 * 1024 * 1024)
+        val koinApp = startKoin {
             androidLogger()
             androidContext(this@RikkaHubApp)
-            workManagerFactory()
             modules(appModule, viewModelModule, dataSourceModule, repositoryModule, pluginModule)
         }
+        val recovery = me.rerere.rikkahub.data.sync.StartupRecovery(
+            scope = get<AppScope>(),
+            restore = { progress ->
+                // Record the attempt before touching Room. An interrupted attempt is manual
+                // on the next launch; a fresh task starts only after the progress page renders.
+                me.rerere.rikkahub.data.sync.ChatHistoryBackup.markAttemptStarted(this)
+                val backup = get<me.rerere.rikkahub.data.sync.ChatHistoryBackup>()
+                backup.applyPendingBeforeServices { phase ->
+                    me.rerere.rikkahub.data.sync.StartupRecoveryDiagnostics.record(this, phase.message)
+                    progress(phase)
+                }
+                backup.lastRestoreResult()?.takeIf { it.startsWith("聊天恢复失败") || it.startsWith("待恢复任务损坏") }
+                    ?.let { error(it) }
+            },
+            clearPending = {
+                me.rerere.rikkahub.data.sync.StartupRecoveryDiagnostics.record(this, "取消待恢复任务")
+                me.rerere.rikkahub.data.sync.ChatHistoryBackup.discardPendingPointer(this)
+            },
+            initializeServices = {
+                me.rerere.rikkahub.data.sync.StartupRecoveryDiagnostics.record(this, "初始化应用服务")
+                initializeAfterRecovery()
+                me.rerere.rikkahub.data.sync.StartupRecoveryDiagnostics.record(this, "应用服务已就绪")
+            },
+        )
+        startupRecovery = recovery
+        // Workers can be created now, but their doWork entry points await the recovery gate.
+        koinApp.workManagerFactory()
+        recovery.start(
+            me.rerere.rikkahub.data.sync.ChatHistoryBackup.hasPending(this),
+            automatically = me.rerere.rikkahub.data.sync.ChatHistoryBackup.shouldStartAutomatically(this),
+        )
+        if (!recovery.isReady) me.rerere.rikkahub.data.sync.StartupRecoveryDiagnostics.record(this, "等待恢复界面显示")
+    }
+
+    private fun initializeAfterRecovery() {
         this.createNotificationChannel()
 
-        // 预热 ChatService 单例: 强制在主线程(Application.onCreate 由 Android 保证
-        // 在主线程执行, 且先于同一进程内任何 Service/BroadcastReceiver/Activity 回调)
-        // 解析并构造 ChatService。原因: ChatService.init 里有 ProcessLifecycleOwner
+        // 恢复结束后在主线程预热 ChatService，界面与后台任务仍在等待启动门禁。
+        // 原因: ChatService.init 里有 ProcessLifecycleOwner
         // 的 addObserver, 该 API 强制要求主线程; 而 ChatService 是 Koin 普通 single
         // (懒汉式), 默认在"首次注入它的调用者所在线程"构造。进程冷启动后, 若第一个
         // 访问 chatService 的是 ProactiveMessageTriggerService(它在自己的
@@ -96,12 +140,6 @@ class RikkaHubApp : Application() {
         runCatching { get<ChatService>() }.onFailure { e ->
             android.util.Log.e(TAG, "Failed to pre-warm ChatService singleton", e)
         }
-
-        // set cursor window size to 32MB
-        DatabaseUtil.setCursorWindowSize(32 * 1024 * 1024)
-
-        // install crash handler
-        CrashHandler.install(this)
 
         // Init QuickJS native library
         QuickJSLoader.init()

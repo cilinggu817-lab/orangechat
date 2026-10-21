@@ -1,6 +1,5 @@
 package me.rerere.rikkahub.ui.pages.backup.tabs
 
-import android.app.TimePickerDialog
 import android.content.Intent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -8,14 +7,21 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.AlertDialogDefaults
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import me.rerere.rikkahub.ui.theme.popupContainerColor
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import me.rerere.rikkahub.data.datastore.AutoBackupDestination
@@ -34,6 +40,7 @@ internal fun AutoBackupSettings(vm: BackupVM) {
     val loaded = !settings.init
     val context = LocalContext.current
     val toaster = LocalToaster.current
+    var showTimeDialog by rememberSaveable { mutableStateOf(false) }
     val directoryPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
         if (uri != null) {
             runCatching {
@@ -105,9 +112,7 @@ internal fun AutoBackupSettings(vm: BackupVM) {
             },
             trailingContent = {
                 TextButton(enabled = loaded, onClick = {
-                    TimePickerDialog(context, { _, hour, minute ->
-                        vm.updateAutoBackupConfig { it.copy(backupHour = hour, backupMinute = minute) }
-                    }, config.backupHour.coerceIn(0, 23), config.backupMinute.coerceIn(0, 59), true).show()
+                    showTimeDialog = true
                 }) {
                     Text("%02d:%02d".format(config.backupHour.coerceIn(0, 23), config.backupMinute.coerceIn(0, 59)))
                 }
@@ -133,4 +138,52 @@ internal fun AutoBackupSettings(vm: BackupVM) {
             },
         )
     })
+    if (showTimeDialog) {
+        BackupTimeDialog(
+            hour = config.backupHour,
+            minute = config.backupMinute,
+            onDismiss = { showTimeDialog = false },
+            onConfirm = { hour, minute ->
+                vm.updateAutoBackupConfig { it.copy(backupHour = hour, backupMinute = minute) }
+                showTimeDialog = false
+            },
+        )
+    }
+}
+
+@Composable
+internal fun BackupTimeDialog(hour: Int, minute: Int, onDismiss: () -> Unit, onConfirm: (Int, Int) -> Unit) {
+    val hourState = rememberTimeWheelState(hour.coerceIn(0, 23), 24)
+    val minuteState = rememberTimeWheelState(minute.coerceIn(0, 59), 60)
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = popupContainerColor(AlertDialogDefaults.containerColor),
+        title = { Text("备份时间") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                Text("按本机时区设置，使用 24 小时制。")
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                    TimeWheel(
+                        state = hourState,
+                        count = 24,
+                        label = "时",
+                        modifier = Modifier.weight(1f),
+                    )
+                    Text(":")
+                    TimeWheel(
+                        state = minuteState,
+                        count = 60,
+                        label = "分",
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(enabled = !hourState.isScrollInProgress && !minuteState.isScrollInProgress, onClick = {
+                onConfirm(hourState.centeredTimeIndex() % 24, minuteState.centeredTimeIndex() % 60)
+            }) { Text("确定") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
+    )
 }

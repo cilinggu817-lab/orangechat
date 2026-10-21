@@ -6,6 +6,7 @@
 
 package me.rerere.rikkahub.data.service
 
+import me.rerere.rikkahub.data.sync.isChatRecoveryBlocking
 import android.app.AlarmManager
 import android.app.PendingIntent
 import android.content.BroadcastReceiver
@@ -16,6 +17,8 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.NonCancellable
@@ -321,6 +324,8 @@ class ProactiveMessageTriggerService : android.app.Service(), KoinComponent {
     private val extraInfoCollector: ExtraInfoInjectionCollector by inject()
     private val proactiveMessageService = ProactiveMessageService()
     private val activeRunCount = AtomicInteger(0)
+    private val serviceJob = SupervisorJob()
+    private val serviceScope = CoroutineScope(Dispatchers.IO + serviceJob)
     private val generationWakeLocks = ConcurrentHashMap<Int, PowerManager.WakeLock>()
 
     companion object {
@@ -348,6 +353,11 @@ class ProactiveMessageTriggerService : android.app.Service(), KoinComponent {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (isChatRecoveryBlocking()) {
+            stopSelf(startId)
+            return START_NOT_STICKY
+        }
+
         Log.d(TAG, "=== TriggerService onStartCommand ===")
         // 外部触发（网关轮询/激进模式设备事件）时跳过内部 minInterval 去重
         val isForceTrigger = intent?.getBooleanExtra(EXTRA_FORCE_TRIGGER, false) ?: false
@@ -383,7 +393,7 @@ class ProactiveMessageTriggerService : android.app.Service(), KoinComponent {
         acquireGenerationWakeLock(startId)
         trace.event("wake_lock", "acquired=true")
 
-        CoroutineScope(Dispatchers.IO).launch {
+        serviceScope.launch {
             var conversationId: kotlin.uuid.Uuid? = null
             var nextDelayOverrideMinutes: Int? = null
             var outcome = "completed"
@@ -1048,8 +1058,7 @@ class ProactiveMessageTriggerService : android.app.Service(), KoinComponent {
                             )
                         }
                     }
-                    val normalConversationOwnsTimer = outcome in setOf(
-                        "cancelled",
+                    val normalConversationOwnsTimer = (outcome == "cancelled" && serviceJob.isActive) || outcome in setOf(
                         "user_returned",
                         "generation_busy",
                         "user_not_idle",
@@ -1106,6 +1115,7 @@ class ProactiveMessageTriggerService : android.app.Service(), KoinComponent {
     }
 
     override fun onDestroy() {
+        serviceScope.cancel()
         generationWakeLocks.keys.toList().forEach(::releaseGenerationWakeLock)
         activeRunCount.set(0)
         super.onDestroy()

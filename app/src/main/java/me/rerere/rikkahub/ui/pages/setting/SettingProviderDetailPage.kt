@@ -98,6 +98,8 @@ import com.dokar.sonner.ToastType
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 import me.rerere.ai.provider.BuiltInTools
+import me.rerere.ai.provider.AudioInputMode
+import me.rerere.ai.provider.supportsDirectAudio
 import me.rerere.ai.provider.Modality
 import me.rerere.ai.provider.Model
 import me.rerere.ai.provider.ModelAbility
@@ -116,6 +118,7 @@ import me.rerere.rikkahub.ui.components.ai.ProviderBalanceText
 import me.rerere.rikkahub.ui.components.nav.BackButton
 import me.rerere.rikkahub.ui.components.ui.AutoAIIcon
 import me.rerere.rikkahub.ui.components.ui.ShareSheet
+import me.rerere.rikkahub.ui.components.ui.Select
 import me.rerere.rikkahub.ui.components.ui.SiliconFlowPowerByIcon
 import me.rerere.rikkahub.ui.components.ui.Tag
 import me.rerere.rikkahub.ui.components.ui.TagType
@@ -622,19 +625,6 @@ private fun ModelSettingsForm(
                         )
 
                         if (model.type == ModelType.CHAT) {
-                            Text("语音输入")
-                            me.rerere.ai.provider.AudioInputMode.entries.forEach { mode ->
-                                androidx.compose.material3.FilterChip(
-                                    selected = model.audioInputMode == mode,
-                                    onClick = { onModelChange(model.copy(audioInputMode = mode)) },
-                                    label = { Text(when (mode) {
-                                        me.rerere.ai.provider.AudioInputMode.AUTO -> "自动（Gemini 直传）"
-                                        me.rerere.ai.provider.AudioInputMode.AUDIO -> "直接发送音频"
-                                        me.rerere.ai.provider.AudioInputMode.ASR -> "先语音转写"
-                                    }) },
-                                )
-                            }
-                            Text("直传支持 Google 原生及 OpenAI Chat Completions；兼容服务不接受音频时请选择转写。")
                             ModalAbilitySelector(
                                 abilities = model.abilities,
                                 onUpdateAbilities = {
@@ -654,6 +644,9 @@ private fun ModelSettingsForm(
                             .padding(16.dp),
                         verticalArrangement = Arrangement.spacedBy(16.dp)
                     ) {
+                        if (model.type == ModelType.CHAT) {
+                            ModelAudioInputSetting(model, parentProvider, onModelChange)
+                        }
                         ProviderOverrideSettings(
                             providerOverride = model.providerOverwrite,
                             onUpdateProviderOverride = { providerOverride ->
@@ -689,6 +682,37 @@ private fun ModelSettingsForm(
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun ModelAudioInputSetting(model: Model, parentProvider: ProviderSetting?, onModelChange: (Model) -> Unit) {
+    val provider = model.providerOverwrite ?: parentProvider
+    val direct = model.supportsDirectAudio(provider)
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text("语音输入方式", style = MaterialTheme.typography.titleSmall)
+        Select(
+            options = AudioInputMode.entries,
+            selectedOption = model.audioInputMode,
+            onOptionSelected = { onModelChange(model.copy(audioInputMode = it)) },
+            optionToString = { mode ->
+                when (mode) {
+                    AudioInputMode.AUTO -> "自动"
+                    AudioInputMode.AUDIO -> "直接发送音频"
+                    AudioInputMode.ASR -> "先转为文字"
+                }
+            },
+        )
+        Text(
+            text = when {
+                model.audioInputMode == AudioInputMode.ASR -> "使用已配置的语音识别服务，将录音转为文字后发送。"
+                direct -> "当前模型会接收原始录音。如果服务不支持音频，可改为先转为文字。"
+                model.audioInputMode == AudioInputMode.AUDIO -> "当前通道不支持直接发送音频，录音将先转为文字。"
+                else -> "当前模型默认先将录音转为文字；支持的 Gemini 聊天模型会接收原始录音。"
+            },
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
 }
 

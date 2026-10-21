@@ -16,7 +16,7 @@ object VoiceMessageTransformer : InputMessageTransformer {
         val provider = ctx.model.findProvider(ctx.settings.providers)
         val directAudio = ctx.model.supportsDirectAudio(provider)
         fun adapt(url: String, transcript: String = ""): UIMessagePart {
-            val audio = UIMessagePart.Audio(if (url.startsWith("/")) Uri.fromFile(File(url)).toString() else url)
+            val audio = UIMessagePart.Audio(if (File(url).isAbsolute) Uri.fromFile(File(url)).toString() else url)
             val supportedFormat = directAudio && runCatching {
                 when (provider) {
                     is ProviderSetting.OpenAI -> audio.openAiAudioFormat()

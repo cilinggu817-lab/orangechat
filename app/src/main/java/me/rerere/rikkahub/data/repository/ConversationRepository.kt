@@ -37,6 +37,10 @@ import me.rerere.rikkahub.data.datastore.SettingsStore
 import me.rerere.rikkahub.data.model.Conversation
 import me.rerere.rikkahub.data.model.MessageNode
 import me.rerere.rikkahub.utils.JsonInstant
+import me.rerere.rikkahub.data.sync.ChatHistoryRestoreMode
+import me.rerere.rikkahub.data.sync.validateChatHistory
+import me.rerere.rikkahub.data.favorite.NodeFavoriteAdapter
+import me.rerere.rikkahub.data.model.NodeFavoriteTarget
 import java.time.Instant
 import kotlin.uuid.Uuid
 
@@ -253,6 +257,67 @@ class ConversationRepository(
 
     suspend fun existsConversationById(uuid: Uuid): Boolean {
         return conversationDAO.existsById(uuid.toString())
+    }
+
+    /** Consistent logical snapshot, without attachment repair or filtering during export. */
+    suspend fun exportChatHistory(): List<Conversation> = database.withTransaction {
+        conversationDAO.getAllIds().map { id -> readChatHistory(checkNotNull(conversationDAO.getConversationById(id))) }
+    }
+
+    private suspend fun readChatHistory(entity: ConversationEntity): Conversation {
+        val favorites = favoriteDAO.getFavoriteNodeIdsOfConversation(entity.id).toSet()
+        return conversationEntityToConversation(entity, messageNodeDAO.loadCompleteNodes(entity.id).map { node ->
+            MessageNode(Uuid.parse(node.id), JsonInstant.decodeFromString(node.messages), node.selectIndex,
+                node.id in favorites)
+        })
+    }
+
+    /** Startup-only: caller must run before ChatService/WorkManager can open sessions. No file collection here. */
+    suspend fun restoreChatHistory(
+        conversations: List<Conversation>,
+        mode: ChatHistoryRestoreMode,
+        favoriteNodeIds: Set<Uuid> = emptySet(),
+        onProgress: (Int, Int) -> Unit = { _, _ -> },
+    ) = database.withTransaction {
+        validateChatHistory(conversations)
+        var restoredCount = 0
+        onProgress(0, conversations.size)
+        conversations.forEach { incoming ->
+            val existingEntity = conversationDAO.getConversationById(incoming.id.toString())
+            if (existingEntity != null && mode == ChatHistoryRestoreMode.INCREMENTAL) return@forEach
+            // Replacing a conversation only needs its old node IDs, not its old message payloads.
+            val oldNodeIds = if (existingEntity == null) emptyList() else
+                messageNodeDAO.getNodeIdsOfConversation(incoming.id.toString())
+            val restored = incoming
+            restored.messageNodes.forEach { node ->
+                val owner = messageNodeDAO.getNodeHeader(node.id.toString())?.conversationId
+                check(owner == null || owner == restored.id.toString()) { "备份消息 ID 与其他本机会话冲突，恢复已取消" }
+            }
+            val folder = restored.folderId?.let { database.folderDao().getFolderById(it.toString()) }
+            val entity = conversationToConversationEntity(restored.copy(folderId = restored.folderId.takeIf {
+                folder?.assistantId == restored.assistantId.toString()
+            }))
+            if (existingEntity == null) conversationDAO.insert(entity) else conversationDAO.update(entity)
+            messageNodeDAO.deleteByConversation(restored.id.toString())
+            saveMessageNodes(restored.id.toString(), restored.messageNodes)
+            messageFtsManager.replaceConversationIndex(restored)
+            val restoredIds = restored.messageNodes.mapTo(hashSetOf()) { it.id.toString() }
+            oldNodeIds.filter { it !in restoredIds }.forEach {
+                favoriteDAO.deleteByRefKey("node:${restored.id}:$it")
+            }
+            restored.messageNodes.forEach { node ->
+                val favorite = node.id in favoriteNodeIds
+                val key = "node:${restored.id}:${node.id}"
+                if (!favorite) favoriteDAO.deleteByRefKey(key) else {
+                    favoriteDAO.upsert(NodeFavoriteAdapter.buildFavoriteEntity(
+                        NodeFavoriteTarget(restored.id, restored.title, node.id, node),
+                        favoriteDAO.getByRefKey(key), System.currentTimeMillis()))
+                }
+            }
+            restoredCount++
+            onProgress(restoredCount, conversations.size)
+        }
+        restoredCount
     }
 
     // Auxiliary generation never rewrites message nodes or recreates a deleted conversation.

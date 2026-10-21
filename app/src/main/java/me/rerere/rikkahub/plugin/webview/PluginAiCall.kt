@@ -9,7 +9,6 @@ package me.rerere.rikkahub.plugin.webview
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
-import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import me.rerere.ai.core.MessageRole
@@ -71,9 +70,5 @@ internal class PluginAiCall(
     }.toString()
 }
 
-internal fun pluginAiResultJavascript(callbackId: String, result: String): String {
-    fun quote(value: String) = JsonPrimitive(value).toString()
-        .replace("\u2028", "\\u2028")
-        .replace("\u2029", "\\u2029")
-    return "window.__bridgeResult(${quote(callbackId)}, JSON.parse(${quote(result)}));"
-}
+internal fun pluginAiResultJavascript(callbackId: String, result: String): String =
+    pluginBridgeJsonJavascript(callbackId, result)

@@ -13,11 +13,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import me.rerere.rikkahub.data.files.FileFolders
-import me.rerere.rikkahub.data.files.SkillPaths
-import me.rerere.rikkahub.data.files.SafeFileResolver
-import me.rerere.rikkahub.data.datastore.Settings
 import me.rerere.rikkahub.data.datastore.SettingsStore
-import me.rerere.rikkahub.data.datastore.migration.SettingsJsonMigrator
 import me.rerere.rikkahub.data.sync.s3.S3Client
 import me.rerere.rikkahub.data.sync.s3.S3Config
 import me.rerere.rikkahub.utils.fileSizeToString
@@ -28,7 +24,6 @@ import java.time.Instant
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
 import java.util.zip.ZipEntry
-import java.util.zip.ZipInputStream
 import java.util.zip.ZipOutputStream
 
 private const val TAG = "S3Sync"
@@ -184,96 +179,15 @@ class S3Sync(
         backupFile
     }
 
-    private suspend fun restoreFromBackupFile(backupFile: File, config: S3Config) = withContext(Dispatchers.IO) {
-        Log.i(TAG, "restoreFromBackupFile: Starting restore from ${backupFile.absolutePath}")
-        if (config.items.contains(S3Config.BackupItem.DATABASE)) {
-            databaseBackupCoordinator.beginRestore()
-        }
-
-        ZipInputStream(FileInputStream(backupFile)).use { zipIn ->
-            var entry: ZipEntry?
-            while (zipIn.nextEntry.also { entry = it } != null) {
-                entry?.let { zipEntry ->
-                    Log.i(TAG, "restoreFromBackupFile: Processing entry ${zipEntry.name}")
-
-                    when (zipEntry.name) {
-                        "settings.json" -> {
-                            val settingsJson = zipIn.readBytes().toString(Charsets.UTF_8)
-                            Log.i(TAG, "restoreFromBackupFile: Restoring settings")
-                            try {
-                                val migratedJson = SettingsJsonMigrator.migrate(settingsJson)
-                                val settings = json.decodeFromString<Settings>(migratedJson)
-                                // Folder grants and pending restores are not portable backup state.
-                                settingsStore.update(settings.copy(
-                                    autoBackupConfig = settings.autoBackupConfig.forRestore(),
-                                ))
-                                Log.i(TAG, "restoreFromBackupFile: Settings restored successfully")
-                            } catch (e: Exception) {
-                                Log.e(TAG, "restoreFromBackupFile: Failed to restore settings", e)
-                                throw Exception("Failed to restore settings: ${e.message}")
-                            }
-                        }
-
-                        "rikka_hub.db", "rikka_hub-wal", "rikka_hub-shm" -> {
-                            if (config.items.contains(S3Config.BackupItem.DATABASE)) {
-                                databaseBackupCoordinator.stageRestorePart(zipEntry.name, zipIn)
-                                Log.i(TAG, "restoreFromBackupFile: Staged ${zipEntry.name} for next launch")
-                            }
-                        }
-
-                        else -> {
-                            if (config.items.contains(S3Config.BackupItem.FILES) &&
-                                zipEntry.name.startsWith("${FileFolders.UPLOAD}/")
-                            ) {
-                                val fileName = zipEntry.name.substringAfter("${FileFolders.UPLOAD}/")
-                                if (fileName.isNotEmpty()) {
-                                    val uploadFolder = File(context.filesDir, FileFolders.UPLOAD)
-                                    if (!uploadFolder.exists()) {
-                                        uploadFolder.mkdirs()
-                                        Log.i(TAG, "restoreFromBackupFile: Created upload directory")
-                                    }
-
-                                    val targetFile = SafeFileResolver.resolveInside(uploadFolder, fileName)
-                                        ?: throw Exception("Invalid upload file path: ${zipEntry.name}")
-                                    Log.i(
-                                        TAG,
-                                        "restoreFromBackupFile: Restoring file ${zipEntry.name} to ${targetFile.absolutePath}"
-                                    )
-
-                                    try {
-                                        targetFile.parentFile?.mkdirs()
-                                        FileOutputStream(targetFile).use { outputStream ->
-                                            zipIn.copyTo(outputStream)
-                                        }
-                                        Log.i(
-                                            TAG,
-                                            "restoreFromBackupFile: Restored ${zipEntry.name} (${targetFile.length()} bytes)"
-                                        )
-                                    } catch (e: Exception) {
-                                        Log.e(TAG, "restoreFromBackupFile: Failed to restore file ${zipEntry.name}", e)
-                                        throw Exception("Failed to restore file ${zipEntry.name}: ${e.message}")
-                                    }
-                                }
-                            } else if (config.items.contains(S3Config.BackupItem.FILES) &&
-                                zipEntry.name.startsWith("${FileFolders.SKILLS}/")
-                            ) {
-                                restoreSkillEntry(zipIn, zipEntry.name)
-                            } else {
-                                Log.i(TAG, "restoreFromBackupFile: Skipping entry ${zipEntry.name}")
-                            }
-                        }
-                    }
-
-                    zipIn.closeEntry()
-                }
-            }
-        }
-
-        if (config.items.contains(S3Config.BackupItem.DATABASE)) {
-            databaseBackupCoordinator.commitStagedRestore()
-        }
-
-        Log.i(TAG, "restoreFromBackupFile: Restore completed successfully")
+    private suspend fun restoreFromBackupFile(
+        backupFile: File, config: S3Config,
+    ) {
+        BackupArchiveRestorer(context, settingsStore, json, databaseBackupCoordinator).restore(
+            archive = backupFile,
+            restoreFiles = config.items.contains(S3Config.BackupItem.FILES),
+            restoreDatabase = config.items.contains(S3Config.BackupItem.DATABASE),
+        )
+        Log.i(TAG, "restoreFromBackupFile: Restore committed; restart required for database activation")
     }
 
     private fun addFileToZip(zipOut: ZipOutputStream, file: File, entryName: String) {
@@ -304,36 +218,6 @@ class S3Sync(
                 val relativePath = file.relativeTo(rootDir).invariantSeparatorsPath
                 addFileToZip(zipOut, file, "$entryPrefix$relativePath")
             }
-        }
-    }
-
-    private fun restoreSkillEntry(zipIn: ZipInputStream, entryName: String) {
-        val relativePath = entryName.substringAfter("${FileFolders.SKILLS}/")
-        val skillName = relativePath.substringBefore('/', missingDelimiterValue = "")
-        val skillRelativePath = relativePath.substringAfter('/', missingDelimiterValue = "")
-
-        if (skillName.isBlank() || skillRelativePath.isBlank()) {
-            Log.w(TAG, "restoreFromBackupFile: Invalid skill entry $entryName")
-            return
-        }
-
-        val skillsRoot = File(context.filesDir, FileFolders.SKILLS).apply { mkdirs() }
-        val skillDir = SkillPaths.resolveSkillDir(skillsRoot, skillName)
-            ?: throw Exception("Invalid skill directory: $entryName")
-        val targetFile = SkillPaths.resolveSkillFile(skillDir, skillRelativePath)
-            ?: throw Exception("Invalid skill file path: $entryName")
-
-        skillDir.mkdirs()
-        targetFile.parentFile?.mkdirs()
-
-        try {
-            FileOutputStream(targetFile).use { outputStream ->
-                zipIn.copyTo(outputStream)
-            }
-            Log.i(TAG, "restoreFromBackupFile: Restored skill file $entryName (${targetFile.length()} bytes)")
-        } catch (e: Exception) {
-            Log.e(TAG, "restoreFromBackupFile: Failed to restore skill file $entryName", e)
-            throw Exception("Failed to restore skill file $entryName: ${e.message}")
         }
     }
 

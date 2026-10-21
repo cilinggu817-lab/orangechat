@@ -1,5 +1,6 @@
 package me.rerere.rikkahub.data.sync
 
+import me.rerere.rikkahub.data.sync.awaitChatRecovery
 import android.content.Context
 import android.net.Uri
 import android.provider.DocumentsContract
@@ -73,6 +74,7 @@ class AutoBackupWorker(context: Context, params: WorkerParameters) : CoroutineWo
     companion object { private val mutex = Mutex() }
 
     override suspend fun doWork(): Result = mutex.withLock {
+        applicationContext.awaitChatRecovery()
         val store = get<SettingsStore>()
         val settings = store.settingsFlow.first { !it.init }
         val config = settings.autoBackupConfig

@@ -22,6 +22,7 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -183,6 +184,13 @@ class ChatVM(
         }
     }
 
+    suspend fun selectAssistant(assistantId: Uuid, createNew: Boolean): Uuid = selectAssistantConversation(
+        assistantId = assistantId,
+        createNew = createNew,
+        persistSelection = settingsStore::updateAssistant,
+        findConversation = { conversationRepo.getConversationsOfAssistant(it).first().firstOrNull()?.id },
+    )
+
     // 检查用户头像删除
     private fun checkUserAvatarDelete(oldSettings: Settings, newSettings: Settings) {
         val oldAvatar = oldSettings.displaySetting.userAvatar
@@ -251,6 +259,7 @@ class ChatVM(
                 mergeWithPrevious,
             ).onFailure {
                 chatService.addError(it, title = context.getString(R.string.error_title_compress_conversation))
+                throw kotlinx.coroutines.CancellationException("Compression failed", it)
             }
         }
     }

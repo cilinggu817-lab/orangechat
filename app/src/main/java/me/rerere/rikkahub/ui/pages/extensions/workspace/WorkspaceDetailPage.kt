@@ -8,6 +8,7 @@ package me.rerere.rikkahub.ui.pages.extensions.workspace
 
 import android.content.Intent
 import me.rerere.rikkahub.ui.components.workspace.rememberWorkspaceFileExporter
+import me.rerere.rikkahub.ui.components.workspace.WorkspaceDownloadFolderSetting
 import android.net.Uri
 import android.provider.OpenableColumns
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -117,7 +118,7 @@ fun WorkspaceDetailPage(id: String) {
 
     var deleteTarget by remember { mutableStateOf<WorkspaceFileEntry?>(null) }
     var showInstallDialog by remember { mutableStateOf(false) }
-    // 导出目标文件条目：非空时触发系统"另存为"选择器
+    // Reuse the granted download folder across file cards, chat links and workspace pages.
     val exportFile = rememberWorkspaceFileExporter(id.toString())
     var previewTarget by remember { mutableStateOf<WorkspaceFileEntry?>(null) }
     var previewResult by remember { mutableStateOf<WorkspaceTextPreview?>(null) }
@@ -336,6 +337,7 @@ private fun WorkspaceBasicPage(
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
+        item { WorkspaceDownloadFolderSetting() }
         item {
             RootfsCard(
                 status = state.shellStatus,
@@ -374,6 +376,9 @@ private fun WorkspaceFilesPage(
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
+        item {
+            WorkspaceDownloadFolderSetting()
+        }
         item {
             AreaSelector(
                 area = state.area,

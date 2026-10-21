@@ -20,6 +20,7 @@ import androidx.datastore.preferences.core.emptyPreferences
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import androidx.datastore.preferences.preferencesDataStoreFile
 import io.pebbletemplates.pebble.PebbleEngine
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.Dispatchers
@@ -47,6 +48,7 @@ import me.rerere.rikkahub.data.datastore.migration.PreferenceStoreV2Migration
 import me.rerere.rikkahub.data.datastore.migration.PreferenceStoreV3Migration
 import me.rerere.rikkahub.data.ai.mcp.McpServerConfig
 import me.rerere.rikkahub.data.ai.prompts.DEFAULT_COMPRESS_PROMPT
+import me.rerere.rikkahub.data.ai.prompts.resolveCompressPrompt
 import me.rerere.rikkahub.data.ai.prompts.DEFAULT_OCR_PROMPT
 import me.rerere.rikkahub.data.ai.prompts.DEFAULT_SUGGESTION_PROMPT
 import me.rerere.rikkahub.data.ai.prompts.DEFAULT_TITLE_PROMPT
@@ -62,6 +64,7 @@ import me.rerere.rikkahub.data.model.PromptInjection
 import me.rerere.rikkahub.data.model.QuickMessage
 import me.rerere.rikkahub.data.model.Tag
 import me.rerere.rikkahub.data.sync.s3.S3Config
+import me.rerere.rikkahub.data.sync.RestorePreferencesSession
 import me.rerere.rikkahub.ui.theme.CustomTheme
 import me.rerere.rikkahub.ui.theme.PresetThemes
 import me.rerere.rikkahub.utils.JsonInstant
@@ -88,7 +91,7 @@ private val Context.settingsStore by preferencesDataStore(
 )
 
 class SettingsStore(
-    context: Context,
+    private val context: Context,
     scope: AppScope,
 ) : KoinComponent {
     companion object {
@@ -292,8 +295,8 @@ class SettingsStore(
                 suggestionPrompt = preferences[SUGGESTION_PROMPT] ?: DEFAULT_SUGGESTION_PROMPT,
                 ocrModelId = preferences[OCR_MODEL]?.let { Uuid.parse(it) } ?: Uuid.random(),
                 ocrPrompt = preferences[OCR_PROMPT] ?: DEFAULT_OCR_PROMPT,
-                compressModelId = preferences[COMPRESS_MODEL]?.let { Uuid.parse(it) } ?: DEFAULT_AUTO_MODEL_ID,
-                compressPrompt = preferences[COMPRESS_PROMPT] ?: DEFAULT_COMPRESS_PROMPT,
+                compressModelId = preferences[COMPRESS_MODEL]?.let { Uuid.parse(it) },
+                compressPrompt = resolveCompressPrompt(preferences[COMPRESS_PROMPT] ?: DEFAULT_COMPRESS_PROMPT),
                 assistantId = preferences[SELECT_ASSISTANT]?.let { Uuid.parse(it) }
                     ?: DEFAULT_ASSISTANT_ID,
                 assistantTags = preferences[ASSISTANT_TAGS]?.let {
@@ -480,6 +483,24 @@ class SettingsStore(
         }
     }
 
+    internal suspend fun <T> withRestoreSession(block: suspend (RestorePreferencesSession<Settings>) -> T): T =
+        updateMutex.withLock {
+            val previous = dataStore.data.first()
+            // Finish migrations and validate the current snapshot before touching any restore targets.
+            settingsFlowRaw.first()
+            block(RestorePreferencesSession(
+                file = context.preferencesDataStoreFile("settings"),
+                apply = { restored ->
+                    check(!restored.init) { "Cannot restore dummy settings" }
+                    publishAndPersist(restored, settingsFlowRaw.first())
+                },
+                rollback = {
+                    dataStore.updateData { previous }
+                    settingsFlow.value = settingsFlowRaw.first()
+                },
+            ))
+        }
+
     /** Apply a change to the latest snapshot and persist it atomically. */
     suspend fun update(fn: (Settings) -> Settings) {
         updateMutex.withLock {
@@ -558,7 +579,8 @@ class SettingsStore(
             preferences[SUGGESTION_PROMPT] = settings.suggestionPrompt
             preferences[OCR_MODEL] = settings.ocrModelId.toString()
             preferences[OCR_PROMPT] = settings.ocrPrompt
-            preferences[COMPRESS_MODEL] = settings.compressModelId.toString()
+            settings.compressModelId?.let { preferences[COMPRESS_MODEL] = it.toString() }
+                ?: preferences.remove(COMPRESS_MODEL)
             preferences[COMPRESS_PROMPT] = settings.compressPrompt
 
             if (canWriteProtected(PROVIDERS, settings.providers, loadedSettings.providers)) {
@@ -824,7 +846,7 @@ data class Settings(
     val suggestionPrompt: String = DEFAULT_SUGGESTION_PROMPT,
     val ocrModelId: Uuid = Uuid.random(),
     val ocrPrompt: String = DEFAULT_OCR_PROMPT,
-    val compressModelId: Uuid = Uuid.random(),
+    val compressModelId: Uuid? = null,
     val compressPrompt: String = DEFAULT_COMPRESS_PROMPT,
     val assistantId: Uuid = DEFAULT_ASSISTANT_ID,
     val providers: List<ProviderSetting> = DEFAULT_PROVIDERS,

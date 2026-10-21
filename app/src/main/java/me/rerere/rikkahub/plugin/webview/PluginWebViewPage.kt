@@ -218,25 +218,23 @@ fun PluginWebViewPage(
                     val content = inputStream?.bufferedReader()?.readText()
                     inputStream?.close()
                     val fileName = uri.lastPathSegment ?: "unknown.txt"
-                    val escapedContent = content?.replace("\\", "\\\\")?.replace("'", "\\'")?.replace("\n", "\\n")?.replace("\r", "\\r") ?: ""
-                    val escapedName = fileName.replace("\\", "\\\\").replace("'", "\\'")
                     webView?.post {
                         webView?.evaluateJavascript(
-                            "window.__bridgeResult('$bridgeCallback', {success:true,fileName:'$escapedName',content:'$escapedContent'});", null
+                            pluginBridgeResultJavascript(bridgeCallback, JSONObject().put("success", true).put("fileName", fileName).put("content", content ?: "")), null
                         )
                     }
                 } catch (e: Exception) {
-                    val errMsg = e.message?.replace("\\", "\\\\")?.replace("'", "\\'") ?: "Unknown error"
+                    val errMsg = e.message ?: "Unknown error"
                     webView?.post {
                         webView?.evaluateJavascript(
-                            "window.__bridgeResult('$bridgeCallback', {success:false,error:'$errMsg'});", null
+                            pluginBridgeResultJavascript(bridgeCallback, JSONObject().put("success", false).put("error", errMsg)), null
                         )
                     }
                 }
             } else {
                 webView?.post {
                     webView?.evaluateJavascript(
-                        "window.__bridgeResult('$bridgeCallback', {success:false,error:'User cancelled'});", null
+                        pluginBridgeResultJavascript(bridgeCallback, JSONObject().put("success", false).put("error", "User cancelled")), null
                     )
                 }
             }
@@ -252,22 +250,19 @@ fun PluginWebViewPage(
             try {
                 val base64 = uriToBase64(context, uri)
                 webView?.evaluateJavascript(
-                    "if(window.__bridgeCallbacks && window.__bridgeCallbacks['$callbackId'])" +
-                            "{window.__bridgeCallbacks['$callbackId']($base64); delete window.__bridgeCallbacks['$callbackId'];}",
+                    pluginBridgeJsonJavascript(callbackId, base64),
                     null
                 )
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to process picked image", e)
                 webView?.evaluateJavascript(
-                    "if(window.__bridgeCallbacks && window.__bridgeCallbacks['$callbackId'])" +
-                            "{window.__bridgeCallbacks['$callbackId'](null); delete window.__bridgeCallbacks['$callbackId'];}",
+                    pluginBridgeResultJavascript(callbackId, null),
                     null
                 )
             }
         } else if (callbackId != null) {
             webView?.evaluateJavascript(
-                "if(window.__bridgeCallbacks && window.__bridgeCallbacks['$callbackId'])" +
-                        "{window.__bridgeCallbacks['$callbackId'](null); delete window.__bridgeCallbacks['$callbackId'];}",
+                pluginBridgeResultJavascript(callbackId, null),
                 null
             )
         }
@@ -288,24 +283,23 @@ fun PluginWebViewPage(
                     val base64 = if (bytes != null) Base64.encodeToString(bytes, Base64.NO_WRAP) else ""
                     val fileName = uri.lastPathSegment ?: "unknown"
                     val mimeType = context.contentResolver.getType(uri) ?: "application/octet-stream"
-                    val escapedName = fileName.replace("\\", "\\\\").replace("'", "\\'")
                     webView?.post {
                         webView?.evaluateJavascript(
-                            "window.__bridgeResult('$callbackId', {success:true,fileName:'$escapedName',mimeType:'$mimeType',base64:'$base64'});", null
+                            pluginBridgeResultJavascript(callbackId, JSONObject().put("success", true).put("fileName", fileName).put("mimeType", mimeType).put("base64", base64)), null
                         )
                     }
                 } catch (e: Exception) {
-                    val errMsg = e.message?.replace("\\", "\\\\")?.replace("'", "\\'") ?: "Unknown error"
+                    val errMsg = e.message ?: "Unknown error"
                     webView?.post {
                         webView?.evaluateJavascript(
-                            "window.__bridgeResult('$callbackId', {success:false,error:'$errMsg'});", null
+                            pluginBridgeResultJavascript(callbackId, JSONObject().put("success", false).put("error", errMsg)), null
                         )
                     }
                 }
             } else {
                 webView?.post {
                     webView?.evaluateJavascript(
-                        "window.__bridgeResult('$callbackId', {success:false,error:'User cancelled'});", null
+                        pluginBridgeResultJavascript(callbackId, JSONObject().put("success", false).put("error", "User cancelled")), null
                     )
                 }
             }
@@ -323,13 +317,13 @@ fun PluginWebViewPage(
                 // null or empty list -> user cancelled
                 webView?.post {
                     webView?.evaluateJavascript(
-                        "window.__bridgeResult('$callbackId', {success:false,error:'User cancelled'});", null
+                        pluginBridgeResultJavascript(callbackId, JSONObject().put("success", false).put("error", "User cancelled")), null
                     )
                 }
             } else {
-                val imported = StringBuilder()
-                val duplicates = StringBuilder()
-                val errors = StringBuilder()
+                val imported = JSONArray()
+                val duplicates = JSONArray()
+                val errors = JSONArray()
                 val seenInBatch = mutableSetOf<String>()
 
                 // Create music/ subdirectory once
@@ -346,10 +340,7 @@ fun PluginWebViewPage(
 
                         if (bytes == null) {
                             val errName = uri.lastPathSegment ?: "unknown"
-                            val escapedErrName = errName.replace("\\", "\\\\").replace("'", "\\'")
-                            val escapedErr = "Failed to read file".replace("\\", "\\\\").replace("'", "\\'")
-                            if (errors.isNotEmpty()) errors.append(",")
-                            errors.append("{fileName:'$escapedErrName',error:'$escapedErr'}")
+                            errors.put(JSONObject().put("fileName", errName).put("error", "Failed to read file"))
                             continue
                         }
 
@@ -366,31 +357,24 @@ fun PluginWebViewPage(
                         val targetFile = dataStore.resolveDataFile("music/$fileName")
                             ?: throw SecurityException("Invalid file name")
                         if (targetFile.exists() || seenInBatch.contains(fileName)) {
-                            val escapedDup = fileName.replace("\\", "\\\\").replace("'", "\\'")
-                            if (duplicates.isNotEmpty()) duplicates.append(",")
-                            duplicates.append("'$escapedDup'")
+                            duplicates.put(fileName)
                         } else {
                             targetFile.writeBytes(bytes)
                             seenInBatch.add(fileName)
 
                             val filePath = targetFile.absolutePath
-                            val escapedPath = filePath.replace("\\", "\\\\").replace("'", "\\'")
-                            val escapedName = fileName.replace("\\", "\\\\").replace("'", "\\'")
-                            if (imported.isNotEmpty()) imported.append(",")
-                            imported.append("{filePath:'$escapedPath',fileName:'$escapedName'}")
+                            imported.put(JSONObject().put("filePath", filePath).put("fileName", fileName))
                         }
                     } catch (e: Exception) {
                         Log.e(TAG, "importAudioFile: failed to process uri=$uri, err=${e.message}", e)
-                        val errName = (uri.lastPathSegment ?: "unknown").replace("\\", "\\\\").replace("'", "\\'")
-                        val escapedErr = (e.message ?: "Unknown error").replace("\\", "\\\\").replace("'", "\\'")
-                        if (errors.isNotEmpty()) errors.append(",")
-                        errors.append("{fileName:'$errName',error:'$escapedErr'}")
+                        val errName = uri.lastPathSegment ?: "unknown"
+                        errors.put(JSONObject().put("fileName", errName).put("error", e.message ?: "Unknown error"))
                     }
                 }
 
                 webView?.post {
                     webView?.evaluateJavascript(
-                        "window.__bridgeResult('$callbackId', {success:true,imported:[$imported],duplicates:[$duplicates],errors:[$errors]});", null
+                        pluginBridgeResultJavascript(callbackId, JSONObject().put("success", true).put("imported", imported).put("duplicates", duplicates).put("errors", errors)), null
                     )
                 }
             }
@@ -413,7 +397,7 @@ fun PluginWebViewPage(
                 }
                 if (result.optBoolean("success")) result.put("fileName", uri?.lastPathSegment ?: "saved_file")
                 webView?.evaluateJavascript(
-                    "window.__bridgeResult(${JSONObject.quote(callbackId)}, JSON.parse(${JSONObject.quote(result.toString())}));",
+                    pluginBridgeJsonJavascript(callbackId, result.toString()),
                     null,
                 )
                 pendingSaveCallbackId = null
@@ -508,7 +492,7 @@ fun PluginWebViewPage(
                                     val captureHeight = fullscreenPlayer?.height ?: height
                                     if (activity == null || targetWebView == null || captureWidth <= 0 || captureHeight <= 0) {
                                         targetWebView?.evaluateJavascript(
-                                            "window.__bridgeResult('$callbackId', {success:false,error:'无法读取播放器画面'});", null
+                                            pluginBridgeResultJavascript(callbackId, JSONObject().put("success", false).put("error", "无法读取播放器画面")), null
                                         )
                                     } else {
                                         val captureView = fullscreenPlayer ?: targetWebView
@@ -530,7 +514,7 @@ fun PluginWebViewPage(
                                             captured.compress(Bitmap.CompressFormat.JPEG, 88, output)
                                             val frame = "data:image/jpeg;base64," + Base64.encodeToString(output.toByteArray(), Base64.NO_WRAP)
                                             val result = JSONObject().put("success", true).put("frame", frame).toString()
-                                            targetWebView.post { targetWebView.evaluateJavascript("window.__bridgeResult('$callbackId', $result);", null) }
+                                            targetWebView.post { targetWebView.evaluateJavascript(pluginBridgeJsonJavascript(callbackId, result.toString()), null) }
                                         }
                                         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                                             PixelCopy.request(activity.window, source, bitmap, { copyResult ->
@@ -576,7 +560,7 @@ fun PluginWebViewPage(
                                 onSaveFileAs = { callbackId, fileName, base64Data ->
                                     if (pendingSaveCallbackId != null) {
                                         webView?.evaluateJavascript(
-                                            "window.__bridgeResult(${JSONObject.quote(callbackId)}, {success:false,error:'Another save is in progress'});", null
+                                            pluginBridgeResultJavascript(callbackId, JSONObject().put("success", false).put("error", "Another save is in progress")), null
                                         )
                                     } else {
                                         pendingSaveCallbackId = callbackId
@@ -587,7 +571,7 @@ fun PluginWebViewPage(
                                             pendingSaveCallbackId = null
                                             pendingSaveBase64Data = null
                                             webView?.evaluateJavascript(
-                                                "window.__bridgeResult(${JSONObject.quote(callbackId)}, {success:false,error:'Cannot open save picker'});", null
+                                                pluginBridgeResultJavascript(callbackId, JSONObject().put("success", false).put("error", "Cannot open save picker")), null
                                             )
                                         }
                                     }
@@ -603,7 +587,7 @@ fun PluginWebViewPage(
                                         overlayPermissionLauncher.launch(intent)
                                         wv.post {
                                             wv.evaluateJavascript(
-                                                "window.__bridgeResult('${null}', {success:false,error:'Overlay permission required. Please grant it in settings and try again.'});", null
+                                                pluginBridgeResultJavascript(null, JSONObject().put("success", false).put("error", "Overlay permission required. Please grant it in settings and try again.")), null
                                             )
                                         }
                                         return@PluginWebViewClient
@@ -629,7 +613,7 @@ fun PluginWebViewPage(
                                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(context)) {
                                         wv.post {
                                             wv.evaluateJavascript(
-                                                "window.__bridgeResult('${null}', {success:false,error:'Overlay permission not granted'});", null
+                                                pluginBridgeResultJavascript(null, JSONObject().put("success", false).put("error", "Overlay permission not granted")), null
                                             )
                                         }
                                         return@PluginWebViewClient
@@ -640,7 +624,7 @@ fun PluginWebViewPage(
                                     if (windowManager == null) {
                                         wv.post {
                                             wv.evaluateJavascript(
-                                                "window.__bridgeResult('${null}', {success:false,error:'Cannot access WindowManager'});", null
+                                                pluginBridgeResultJavascript(null, JSONObject().put("success", false).put("error", "Cannot access WindowManager")), null
                                             )
                                         }
                                         return@PluginWebViewClient
@@ -703,7 +687,7 @@ fun PluginWebViewPage(
                                                         val cbId = params["callbackId"] ?: ""
                                                         overlayWv.post {
                                                             overlayWv.evaluateJavascript(
-                                                                "window.__bridgeResult('$cbId', {running:$running,remaining:$remaining});", null
+                                                                pluginBridgeResultJavascript(cbId, JSONObject().put("running", running).put("remaining", remaining)), null
                                                             )
                                                         }
                                                     }
@@ -716,7 +700,7 @@ fun PluginWebViewPage(
                                                         val cbId = params["callbackId"] ?: ""
                                                         overlayWv.post {
                                                             overlayWv.evaluateJavascript(
-                                                                "window.__bridgeResult('$cbId', $result);", null
+                                                                pluginBridgeJsonJavascript(cbId, result.toString()), null
                                                             )
                                                         }
                                                     }
@@ -727,7 +711,7 @@ fun PluginWebViewPage(
                                                         val cbId = params["callbackId"] ?: ""
                                                         overlayWv.post {
                                                             overlayWv.evaluateJavascript(
-                                                                "window.__bridgeResult('$cbId', true);", null
+                                                                pluginBridgeResultJavascript(cbId, true), null
                                                             )
                                                         }
                                                     }
@@ -984,7 +968,7 @@ private class PluginWebViewClient(
                         Toast.makeText(webView.context.applicationContext, message, Toast.LENGTH_SHORT).show()
                     }
                 }
-                webView.post { webView.evaluateJavascript("window.__bridgeResult('$callbackId', {success:true});", null) }
+                webView.post { webView.evaluateJavascript(pluginBridgeResultJavascript(callbackId, JSONObject().put("success", true)), null) }
             }
 
             "watchAppearance" -> {
@@ -1008,7 +992,7 @@ private class PluginWebViewClient(
                     else watchFrameTransfers.getOrPut(transferId) { StringBuilder() }
                     builder.append(chunk)
                 }
-                webView.post { webView.evaluateJavascript("window.__bridgeResult('$callbackId', {success:true});", null) }
+                webView.post { webView.evaluateJavascript(pluginBridgeResultJavascript(callbackId, JSONObject().put("success", true)), null) }
             }
 
             "watchCaptureFrame" -> {
@@ -1046,7 +1030,7 @@ private class PluginWebViewClient(
                         Log.d(TAG, "getPluginConfig for ${pluginInfo.manifest.id}: $result")
                         webView.post {
                             webView.evaluateJavascript(
-                                "window.__bridgeResult('${params["callbackId"]}', $result);", null
+                                pluginBridgeJsonJavascript(params["callbackId"], result.toString()), null
                             )
                         }
                     } catch (e: CancellationException) {
@@ -1055,7 +1039,7 @@ private class PluginWebViewClient(
                         Log.e(TAG, "Failed to get plugin config", e)
                         webView.post {
                             webView.evaluateJavascript(
-                                "window.__bridgeResult('${params["callbackId"]}', {});", null
+                                pluginBridgeResultJavascript(params["callbackId"], JSONObject()), null
                             )
                         }
                     }
@@ -1070,7 +1054,7 @@ private class PluginWebViewClient(
                 } else "null"
                 webView.post {
                     webView.evaluateJavascript(
-                        "window.__bridgeResult('${params["callbackId"]}', $result);", null
+                        pluginBridgeJsonJavascript(params["callbackId"], result.toString()), null
                     )
                 }
             }
@@ -1081,7 +1065,7 @@ private class PluginWebViewClient(
                 dataStore.setData(key, value)
                 webView.post {
                     webView.evaluateJavascript(
-                        "window.__bridgeResult('${params["callbackId"]}', true);", null
+                        pluginBridgeResultJavascript(params["callbackId"], true), null
                     )
                 }
             }
@@ -1091,7 +1075,7 @@ private class PluginWebViewClient(
                 dataStore.deleteData(key)
                 webView.post {
                     webView.evaluateJavascript(
-                        "window.__bridgeResult('${params["callbackId"]}', true);", null
+                        pluginBridgeResultJavascript(params["callbackId"], true), null
                     )
                 }
             }
@@ -1101,7 +1085,7 @@ private class PluginWebViewClient(
                 val jsonArray = JSONArray(keys)
                 webView.post {
                     webView.evaluateJavascript(
-                        "window.__bridgeResult('${params["callbackId"]}', ${jsonArray.toString()});", null
+                        pluginBridgeResultJavascript(params["callbackId"], jsonArray), null
                     )
                 }
             }
@@ -1136,13 +1120,13 @@ private class PluginWebViewClient(
                     file.writeBytes(bytes)
                     webView.post {
                         webView.evaluateJavascript(
-                            "window.__bridgeResult('${params["callbackId"]}', '${file.absolutePath}');", null
+                            pluginBridgeResultJavascript(params["callbackId"], file.absolutePath), null
                         )
                     }
                 } catch (e: Exception) {
                     webView.post {
                         webView.evaluateJavascript(
-                            "window.__bridgeResult('${params["callbackId"]}', null);", null
+                            pluginBridgeResultJavascript(params["callbackId"], null), null
                         )
                     }
                 }
@@ -1158,20 +1142,20 @@ private class PluginWebViewClient(
                         val base64 = Base64.encodeToString(bytes, Base64.NO_WRAP)
                         webView.post {
                             webView.evaluateJavascript(
-                                "window.__bridgeResult('${params["callbackId"]}', '$base64');", null
+                                pluginBridgeResultJavascript(params["callbackId"], base64), null
                             )
                         }
                     } else {
                         webView.post {
                             webView.evaluateJavascript(
-                                "window.__bridgeResult('${params["callbackId"]}', null);", null
+                                pluginBridgeResultJavascript(params["callbackId"], null), null
                             )
                         }
                     }
                 } catch (e: Exception) {
                     webView.post {
                         webView.evaluateJavascript(
-                            "window.__bridgeResult('${params["callbackId"]}', null);", null
+                            pluginBridgeResultJavascript(params["callbackId"], null), null
                         )
                     }
                 }
@@ -1186,7 +1170,7 @@ private class PluginWebViewClient(
                 val jsonArray = JSONArray(files)
                 webView.post {
                     webView.evaluateJavascript(
-                        "window.__bridgeResult('${params["callbackId"]}', ${jsonArray.toString()});", null
+                        pluginBridgeResultJavascript(params["callbackId"], jsonArray), null
                     )
                 }
             }
@@ -1197,7 +1181,7 @@ private class PluginWebViewClient(
                 val result = file?.delete() == true
                 webView.post {
                     webView.evaluateJavascript(
-                        "window.__bridgeResult('${params["callbackId"]}', $result);", null
+                        pluginBridgeJsonJavascript(params["callbackId"], result.toString()), null
                     )
                 }
             }
@@ -1212,14 +1196,14 @@ private class PluginWebViewClient(
                     MusicPlayerService.play(webView.context, safeFile.absolutePath, title, artist)
                     webView.post {
                         webView.evaluateJavascript(
-                            "window.__bridgeResult('${params["callbackId"]}', {success:true});", null
+                            pluginBridgeResultJavascript(params["callbackId"], JSONObject().put("success", true)), null
                         )
                     }
                 } catch (e: Exception) {
-                    val errMsg = e.message?.replace("\\", "\\\\")?.replace("'", "\\'") ?: "Unknown error"
+                    val errMsg = e.message ?: "Unknown error"
                     webView.post {
                         webView.evaluateJavascript(
-                            "window.__bridgeResult('${params["callbackId"]}', {success:false,error:'$errMsg'});", null
+                            pluginBridgeResultJavascript(params["callbackId"], JSONObject().put("success", false).put("error", errMsg)), null
                         )
                     }
                 }
@@ -1230,13 +1214,13 @@ private class PluginWebViewClient(
                     MusicPlayerService.pause(webView.context)
                     webView.post {
                         webView.evaluateJavascript(
-                            "window.__bridgeResult('${params["callbackId"]}', {success:true});", null
+                            pluginBridgeResultJavascript(params["callbackId"], JSONObject().put("success", true)), null
                         )
                     }
                 } catch (e: Exception) {
                     webView.post {
                         webView.evaluateJavascript(
-                            "window.__bridgeResult('${params["callbackId"]}', {success:false});", null
+                            pluginBridgeResultJavascript(params["callbackId"], JSONObject().put("success", false)), null
                         )
                     }
                 }
@@ -1247,13 +1231,13 @@ private class PluginWebViewClient(
                     MusicPlayerService.resume(webView.context)
                     webView.post {
                         webView.evaluateJavascript(
-                            "window.__bridgeResult('${params["callbackId"]}', {success:true});", null
+                            pluginBridgeResultJavascript(params["callbackId"], JSONObject().put("success", true)), null
                         )
                     }
                 } catch (e: Exception) {
                     webView.post {
                         webView.evaluateJavascript(
-                            "window.__bridgeResult('${params["callbackId"]}', {success:false});", null
+                            pluginBridgeResultJavascript(params["callbackId"], JSONObject().put("success", false)), null
                         )
                     }
                 }
@@ -1264,13 +1248,13 @@ private class PluginWebViewClient(
                     MusicPlayerService.stop(webView.context)
                     webView.post {
                         webView.evaluateJavascript(
-                            "window.__bridgeResult('${params["callbackId"]}', {success:true});", null
+                            pluginBridgeResultJavascript(params["callbackId"], JSONObject().put("success", true)), null
                         )
                     }
                 } catch (e: Exception) {
                     webView.post {
                         webView.evaluateJavascript(
-                            "window.__bridgeResult('${params["callbackId"]}', {success:false});", null
+                            pluginBridgeResultJavascript(params["callbackId"], JSONObject().put("success", false)), null
                         )
                     }
                 }
@@ -1280,10 +1264,10 @@ private class PluginWebViewClient(
                 val position = params["position"]?.toIntOrNull() ?: 0
                 try {
                     MusicPlayerService.seekTo(webView.context, position)
-                    webView.post { webView.evaluateJavascript("window.__bridgeResult('${params["callbackId"]}', {success:true});", null) }
+                    webView.post { webView.evaluateJavascript(pluginBridgeResultJavascript(params["callbackId"], JSONObject().put("success", true)), null) }
                 } catch (e: Exception) {
                     Log.e(TAG, "musicSeek failed, position=$position, err=${e.message}", e)
-                    webView.post { webView.evaluateJavascript("window.__bridgeResult('${params["callbackId"]}', {success:false});", null) }
+                    webView.post { webView.evaluateJavascript(pluginBridgeResultJavascript(params["callbackId"], JSONObject().put("success", false)), null) }
                 }
             }
 
@@ -1293,12 +1277,12 @@ private class PluginWebViewClient(
                     val duration = MusicPlayerService.getDuration()
                     webView.post {
                         webView.evaluateJavascript(
-                            "window.__bridgeResult('${params["callbackId"]}', {position:$position,duration:$duration});", null
+                            pluginBridgeResultJavascript(params["callbackId"], JSONObject().put("position", position).put("duration", duration)), null
                         )
                     }
                 } catch (e: Exception) {
                     Log.e(TAG, "musicGetProgress failed, err=${e.message}", e)
-                    webView.post { webView.evaluateJavascript("window.__bridgeResult('${params["callbackId"]}', {position:0,duration:0});", null) }
+                    webView.post { webView.evaluateJavascript(pluginBridgeResultJavascript(params["callbackId"], JSONObject().put("position", 0).put("duration", 0)), null) }
                 }
             }
 
@@ -1314,16 +1298,16 @@ private class PluginWebViewClient(
                         val result = callPluginTool(toolName, toolParams)
                         webView.post {
                             webView.evaluateJavascript(
-                                "window.__bridgeResult('${params["callbackId"]}', ${result});", null
+                                pluginBridgeJsonJavascript(params["callbackId"], result.toString()), null
                             )
                         }
                     } catch (e: CancellationException) {
                         throw e
                     } catch (e: Exception) {
-                        val errorResult = """{"success":false,"error":"${e.message}"}"""
+                        val errorResult = JSONObject().put("success", false).put("error", e.message ?: "Unknown error")
                         webView.post {
                             webView.evaluateJavascript(
-                                "window.__bridgeResult('${params["callbackId"]}', $errorResult);", null
+                                pluginBridgeResultJavascript(params["callbackId"], errorResult), null
                             )
                         }
                     }
@@ -1504,17 +1488,17 @@ private class PluginWebViewClient(
                         val hookResult = handleHookTrigger(webView, hookName, hookContextJson)
                         webView.post {
                             webView.evaluateJavascript(
-                                "window.__bridgeResult('$callbackId', $hookResult);", null
+                                pluginBridgeJsonJavascript(callbackId, hookResult.toString()), null
                             )
                         }
                     } catch (e: CancellationException) {
                         throw e
                     } catch (e: Exception) {
                         Log.e(TAG, "notifyHook failed", e)
-                        val errorResult = """{"success":false,"error":"${e.message?.replace("\"", "\\\"")?.replace("\\", "\\\\")}"}"""
+                        val errorResult = JSONObject().put("success", false).put("error", e.message ?: "Unknown error")
                         webView.post {
                             webView.evaluateJavascript(
-                                "window.__bridgeResult('$callbackId', $errorResult);", null
+                                pluginBridgeResultJavascript(callbackId, errorResult), null
                             )
                         }
                     }
@@ -1527,7 +1511,7 @@ private class PluginWebViewClient(
                 onStartTimer(webView, seconds)
                 webView.post {
                     webView.evaluateJavascript(
-                        "window.__bridgeResult('$callbackId', {success:true});", null
+                        pluginBridgeResultJavascript(callbackId, JSONObject().put("success", true)), null
                     )
                 }
             }
@@ -1537,7 +1521,7 @@ private class PluginWebViewClient(
                 onStopTimer()
                 webView.post {
                     webView.evaluateJavascript(
-                        "window.__bridgeResult('$callbackId', {success:true});", null
+                        pluginBridgeResultJavascript(callbackId, JSONObject().put("success", true)), null
                     )
                 }
             }
@@ -1548,7 +1532,7 @@ private class PluginWebViewClient(
                 val remaining = PomodoroTimerService.getRemainingSeconds()
                 webView.post {
                     webView.evaluateJavascript(
-                        "window.__bridgeResult('$callbackId', {running:$running,remaining:$remaining});", null
+                        pluginBridgeResultJavascript(callbackId, JSONObject().put("running", running).put("remaining", remaining)), null
                     )
                 }
             }
@@ -1559,7 +1543,7 @@ private class PluginWebViewClient(
                 onShowOverlay(webView, html)
                 webView.post {
                     webView.evaluateJavascript(
-                        "window.__bridgeResult('$callbackId', {success:true});", null
+                        pluginBridgeResultJavascript(callbackId, JSONObject().put("success", true)), null
                     )
                 }
             }
@@ -1592,7 +1576,7 @@ private class PluginWebViewClient(
                 onHideOverlay()
                 webView.post {
                     webView.evaluateJavascript(
-                        "window.__bridgeResult('$callbackId', {success:true});", null
+                        pluginBridgeResultJavascript(callbackId, JSONObject().put("success", true)), null
                     )
                 }
             }
@@ -1633,11 +1617,9 @@ private class PluginWebViewClient(
             ?: throw IllegalArgumentException("invalid conversationId")
 
     private fun postBridgeJson(webView: WebView, callbackId: String, value: JSONObject) {
-        val encoded = JSONObject.quote(value.toString())
-        val callback = JSONObject.quote(callbackId)
         webView.post {
             webView.evaluateJavascript(
-                "window.__bridgeResult($callback, JSON.parse($encoded));",
+                pluginBridgeResultJavascript(callbackId, value),
                 null,
             )
         }
@@ -1668,22 +1650,40 @@ private class PluginWebViewClient(
 
     private suspend fun handleHookTrigger(webView: WebView, hookName: String, contextJson: String): String {
         val hookConfig = pluginInfo.manifest.hookConfigs[hookName]
-            ?: return """{"success":false,"error":"Hook '$hookName' not configured in manifest"}"""
+            ?: return JSONObject()
+                .put("success", false)
+                .put("error", "Hook '$hookName' not configured in manifest")
+                .toString()
 
         when (hookConfig.action) {
             "call_js_function" -> {
                 val functionName = hookConfig.function
-                    ?: return """{"success":false,"error":"function is required for call_js_function action"}"""
+                    ?: return JSONObject()
+                        .put("success", false)
+                        .put("error", "function is required for call_js_function action")
+                        .toString()
+
+                val jsCode = pluginHookJavascript(functionName, contextJson)
+                    ?: return JSONObject()
+                        .put("success", false)
+                        .put("error", "function must be a JavaScript identifier")
+                        .toString()
 
                 if (!hookConfig.autoTrigger) {
-                    return """{"success":false,"error":"Hook '$hookName' is not auto-triggered"}"""
+                    return JSONObject()
+                        .put("success", false)
+                        .put("error", "Hook '$hookName' is not auto-triggered")
+                        .toString()
                 }
 
-                val jsCode = "try { if(typeof $functionName === 'function') { $functionName(${escapeJsString(contextJson)}); } } catch(e) { console.error('Hook JS error:', e); }"
                 webView.post {
                     webView.evaluateJavascript(jsCode, null)
                 }
-                return """{"success":true,"action":"call_js_function","function":"$functionName"}"""
+                return JSONObject()
+                    .put("success", true)
+                    .put("action", "call_js_function")
+                    .put("function", functionName)
+                    .toString()
             }
 
             "call_ai" -> {

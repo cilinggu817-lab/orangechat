@@ -15,7 +15,7 @@ import java.io.File
 import java.util.Base64
 
 @RunWith(RobolectricTestRunner::class)
-@Config(manifest = Config.NONE, sdk = [28])
+@Config(application = android.app.Application::class, manifest = Config.NONE, sdk = [28])
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 class AttachmentIntegrityTest {
     @get:Rule val temporary = TemporaryFolder()
