@@ -32,7 +32,9 @@ object VoiceMessageTransformer : InputMessageTransformer {
                 )
             }
         }
-        return messages.map { message ->
+        // 直传音频时，每条历史语音都会被 base64 编进请求；只保留最近几条原音频，防止 OOM
+        val limited = if (directAudio) limitRecentAudio(messages) else messages
+        return limited.map { message ->
             message.copy(parts = message.parts.map { part ->
                 when (part) {
                     is UIMessagePart.VoiceMessage -> adapt(part.url, part.transcript)
