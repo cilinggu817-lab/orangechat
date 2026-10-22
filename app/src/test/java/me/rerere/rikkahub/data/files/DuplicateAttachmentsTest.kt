@@ -11,8 +11,10 @@ import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
 
 @RunWith(RobolectricTestRunner::class)
+@Config(application = android.app.Application::class, manifest = Config.NONE, sdk = [28])
 class DuplicateAttachmentsTest {
     @get:Rule val temporary = TemporaryFolder()
 
