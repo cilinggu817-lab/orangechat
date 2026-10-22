@@ -126,10 +126,18 @@ fun UIMessagePart.Audio.encodeBase64(withPrefix: Boolean = true): Result<String>
     }
 }
 
+/**
+ * 每次请求都会把历史图片重新解码，位图按 4 字节/像素占内存。
+ * 1600 万像素时单张位图约 64MB，图片多的会话容易 OOM；压到约 600 万像素（单张约 24MB），
+ * 仍能完整保留 1440x3200 这类手机截图，1200 万像素照片会缩到 300 万像素。
+ */
+internal const val IMAGE_MAX_DIMENSION = 10_000
+internal const val IMAGE_MAX_PIXELS = 6_000_000L
+
 private fun File.compressAndEncode(
     mimeType: String,
-    maxDimension: Int = 10_000,
-    maxPixels: Long = 16_000_000L,
+    maxDimension: Int = IMAGE_MAX_DIMENSION,
+    maxPixels: Long = IMAGE_MAX_PIXELS,
     quality: Int = 85
 ): Pair<String, String> {
     // GIF 保持原样（可能是动图）

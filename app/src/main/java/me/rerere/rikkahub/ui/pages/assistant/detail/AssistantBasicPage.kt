@@ -46,6 +46,8 @@ import me.rerere.ai.provider.ModelType
 import me.rerere.rikkahub.R
 import me.rerere.rikkahub.data.db.entity.WorkspaceEntity
 import me.rerere.rikkahub.data.model.Assistant
+import me.rerere.rikkahub.data.ai.transformers.MAX_CONTEXT_IMAGES_RANGE
+import me.rerere.rikkahub.data.ai.transformers.MAX_CONTEXT_VOICES_RANGE
 import me.rerere.rikkahub.ui.components.ai.ModelSelector
 import me.rerere.rikkahub.ui.components.ai.ReasoningButton
 import me.rerere.rikkahub.ui.components.nav.BackButton
@@ -472,6 +474,28 @@ internal fun AssistantBasicContent(
                 )
             }
             HorizontalDivider()
+            MediaLimitSlider(
+                assistantId = assistant.id,
+                value = assistant.maxContextImages,
+                range = MAX_CONTEXT_IMAGES_RANGE,
+                label = stringResource(R.string.assistant_page_context_images_size),
+                description = stringResource(R.string.assistant_page_context_images_desc),
+                countText = { stringResource(R.string.assistant_page_context_images_count, it) },
+                unlimitedText = stringResource(R.string.assistant_page_context_images_unlimited),
+                onChange = { onUpdate(assistant.copy(maxContextImages = it)) },
+            )
+            HorizontalDivider()
+            MediaLimitSlider(
+                assistantId = assistant.id,
+                value = assistant.maxContextVoices,
+                range = MAX_CONTEXT_VOICES_RANGE,
+                label = stringResource(R.string.assistant_page_context_voices_size),
+                description = stringResource(R.string.assistant_page_context_voices_desc),
+                countText = { stringResource(R.string.assistant_page_context_voices_count, it) },
+                unlimitedText = stringResource(R.string.assistant_page_context_voices_unlimited),
+                onChange = { onUpdate(assistant.copy(maxContextVoices = it)) },
+            )
+            HorizontalDivider()
             FormItem(
                 modifier = Modifier.padding(8.dp),
                 label = {
@@ -621,5 +645,52 @@ internal fun AssistantBasicContent(
                 }
             }
         }
+    }
+}
+
+/** 与上下文消息数量同款的滑条：0 = 不限制，松手才保存。 */
+@Composable
+private fun MediaLimitSlider(
+    assistantId: Uuid,
+    value: Int,
+    range: Int,
+    label: String,
+    description: String,
+    countText: @Composable (Int) -> String,
+    unlimitedText: String,
+    onChange: (Int) -> Unit,
+) {
+    FormItem(
+        modifier = Modifier.padding(8.dp),
+        label = { Text(label) },
+        description = { Text(text = description) },
+    ) {
+        var sliderValue by remember(assistantId) {
+            mutableFloatStateOf(value.toFloat().coerceIn(0f, range.toFloat()))
+        }
+        var editing by remember(assistantId) { mutableStateOf(false) }
+        LaunchedEffect(assistantId, value) {
+            if (!editing) sliderValue = value.toFloat().coerceIn(0f, range.toFloat())
+        }
+        Slider(
+            value = sliderValue,
+            onValueChange = {
+                editing = true
+                sliderValue = it
+            },
+            onValueChangeFinished = {
+                editing = false
+                onChange(sliderValue.roundToInt())
+            },
+            valueRange = 0f..range.toFloat(),
+            steps = 0,
+            modifier = Modifier.fillMaxWidth()
+        )
+        val count = sliderValue.roundToInt()
+        Text(
+            text = if (count > 0) countText(count) else unlimitedText,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.secondary.copy(alpha = 0.75f),
+        )
     }
 }

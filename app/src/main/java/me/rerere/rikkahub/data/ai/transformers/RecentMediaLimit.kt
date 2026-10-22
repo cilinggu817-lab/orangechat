@@ -9,32 +9,48 @@ package me.rerere.rikkahub.data.ai.transformers
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
 
-/** 请求里最多带几条原始语音 / 几张上传图片；更早的只在请求中降级，存储的消息不动。 */
-const val RECENT_AUDIO_LIMIT = 5
-const val RECENT_IMAGE_LIMIT = 5
+/** 助手设置里滑条的上限；0 表示不限制。 */
+const val MAX_CONTEXT_IMAGES_RANGE = 120
+const val MAX_CONTEXT_VOICES_RANGE = 60
 
 const val OLD_AUDIO_PLACEHOLDER = "[较早的语音，未附带原音频，也没有转写文本]"
 const val OLD_IMAGE_PLACEHOLDER = "[较早的图片，为节省内存未附带原图]"
 
+/** 每批裁剪多少个：上限的一半（向上取整），最多 10 个。 */
+internal fun trimChunkSize(limit: Int): Int = minOf(10, (limit + 1) / 2).coerceAtLeast(1)
+
 /**
- * 从最新往前数，保留 [keep] 个满足 [isTarget] 的顶层 part，更早的交给 [downgrade] 替换。
- * 只处理消息的顶层 parts；工具结果里的图片属于工具观察，不在这里计数或替换。
+ * 计算要降级多少个最旧的媒体。
+ *
+ * 超过上限后不是来一个挤一个，而是按批整块裁掉，这样请求前缀要攒够一批新媒体才变一次，
+ * 缓存失效的次数少很多。保留数始终落在 (limit - chunk, limit] 之间，limit ≥ 1 时不会归零。
+ */
+internal fun mediaToDowngrade(total: Int, limit: Int): Int {
+    if (limit <= 0 || total <= limit) return 0
+    val chunk = trimChunkSize(limit)
+    val excess = total - limit
+    return ((excess + chunk - 1) / chunk) * chunk
+}
+
+/**
+ * 只处理消息的顶层 parts；工具结果里的图片属于工具观察，不计数也不替换。
+ * 只影响本次请求，存储的消息不变。
  */
 fun limitRecentParts(
     messages: List<UIMessage>,
-    keep: Int,
+    limit: Int,
     isTarget: (UIMessagePart) -> Boolean,
     downgrade: (UIMessagePart) -> UIMessagePart,
 ): List<UIMessage> {
     val total = messages.sumOf { message -> message.parts.count(isTarget) }
-    if (total <= keep) return messages
-    var toDowngrade = total - keep.coerceAtLeast(0)
-    // 消息按时间正序，前 toDowngrade 个目标就是最旧的那些
+    var remaining = mediaToDowngrade(total, limit)
+    if (remaining == 0) return messages
+    // 消息按时间正序，前 remaining 个目标就是最旧的那些
     return messages.map { message ->
-        if (toDowngrade == 0 || message.parts.none(isTarget)) return@map message
+        if (remaining == 0 || message.parts.none(isTarget)) return@map message
         message.copy(parts = message.parts.map { part ->
-            if (toDowngrade > 0 && isTarget(part)) {
-                toDowngrade--
+            if (remaining > 0 && isTarget(part)) {
+                remaining--
                 downgrade(part)
             } else {
                 part
@@ -60,8 +76,8 @@ fun isHistoryUploadImage(part: UIMessagePart): Boolean =
 
 fun downgradeOldImage(part: UIMessagePart): UIMessagePart = UIMessagePart.Text(OLD_IMAGE_PLACEHOLDER)
 
-fun limitRecentAudio(messages: List<UIMessage>, keep: Int = RECENT_AUDIO_LIMIT): List<UIMessage> =
-    limitRecentParts(messages, keep, ::isHistoryAudio, ::downgradeOldAudio)
+fun limitRecentAudio(messages: List<UIMessage>, limit: Int): List<UIMessage> =
+    limitRecentParts(messages, limit, ::isHistoryAudio, ::downgradeOldAudio)
 
-fun limitRecentUploadImages(messages: List<UIMessage>, keep: Int = RECENT_IMAGE_LIMIT): List<UIMessage> =
-    limitRecentParts(messages, keep, ::isHistoryUploadImage, ::downgradeOldImage)
+fun limitRecentUploadImages(messages: List<UIMessage>, limit: Int): List<UIMessage> =
+    limitRecentParts(messages, limit, ::isHistoryUploadImage, ::downgradeOldImage)

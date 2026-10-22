@@ -77,4 +77,19 @@ class FileEncoderExifTransformTest {
         private const val ORIENTATION_TRANSVERSE = 7
         private const val ORIENTATION_ROTATE_270 = 8
     }
+
+    @Test
+    fun `default budget keeps a QHD phone screenshot at full size`() {
+        assertEquals(1, calculateImageInSampleSize(1440, 3200, IMAGE_MAX_DIMENSION, IMAGE_MAX_PIXELS))
+    }
+
+    @Test
+    fun `default budget halves a 12MP camera photo`() {
+        assertEquals(2, calculateImageInSampleSize(4000, 3000, IMAGE_MAX_DIMENSION, IMAGE_MAX_PIXELS))
+    }
+
+    @Test
+    fun `default budget shrinks a 50MP photo to a quarter`() {
+        assertEquals(4, calculateImageInSampleSize(8160, 6120, IMAGE_MAX_DIMENSION, IMAGE_MAX_PIXELS))
+    }
 }

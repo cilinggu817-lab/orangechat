@@ -65,6 +65,14 @@
   <string name="assistant_page_context_message_desc">控制多少條歷史訊息會被作為上下文發送給模型, 超過此數量的訊息會被忽略，只有最近的N條訊息會被保留，可以節省token</string>
   <string name="assistant_page_context_message_size">上下文訊息數量</string>
   <string name="assistant_page_context_message_unlimited">無限上下文訊息</string>
+  <string name="assistant_page_context_images_size">上下文圖片數量</string>
+  <string name="assistant_page_context_images_desc">只有最近的N張上傳圖片會以原圖傳送給模型，更早的換成文字說明。圖片多時可以節省記憶體，但每次裁剪都會讓一部分快取失效。0為不限制</string>
+  <string name="assistant_page_context_images_count">最近圖片數量: %d</string>
+  <string name="assistant_page_context_images_unlimited">不限制圖片數量</string>
+  <string name="assistant_page_context_voices_size">上下文語音數量</string>
+  <string name="assistant_page_context_voices_desc">對直接聽音訊的模型，只有最近的N條語音會以原音訊傳送，更早的改傳轉寫文字。語音多時可以節省記憶體，但每次裁剪都會讓一部分快取失效。0為不限制</string>
+  <string name="assistant_page_context_voices_count">最近語音數量: %d</string>
+  <string name="assistant_page_context_voices_unlimited">不限制語音數量</string>
   <string name="assistant_page_creative">創造</string>
   <string name="assistant_page_current_assistant">當前助手</string>
   <string name="assistant_page_custom_bodies">自定義 Body</string>

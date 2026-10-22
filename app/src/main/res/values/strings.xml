@@ -68,6 +68,14 @@
   <string name="assistant_page_context_message_desc">Controls how many historical messages will be sent to the model as context. Messages exceeding this number will be ignored, only the most recent N messages will be retained, which can save tokens</string>
   <string name="assistant_page_context_message_size">Context Message Size</string>
   <string name="assistant_page_context_message_unlimited">Unlimited context messages</string>
+  <string name="assistant_page_context_images_size">Context Images</string>
+  <string name="assistant_page_context_images_desc">Only the most recent N uploaded images are sent as images; older ones become a text note. Saves memory with many images, but each trim invalidates part of the prompt cache. 0 means unlimited</string>
+  <string name="assistant_page_context_images_count">Recent images: %d</string>
+  <string name="assistant_page_context_images_unlimited">Unlimited images</string>
+  <string name="assistant_page_context_voices_size">Context Voice Messages</string>
+  <string name="assistant_page_context_voices_desc">For models that listen to audio directly, only the most recent N voice messages are sent as audio; older ones use their transcript. Saves memory with many voice messages, but each trim invalidates part of the prompt cache. 0 means unlimited</string>
+  <string name="assistant_page_context_voices_count">Recent voice messages: %d</string>
+  <string name="assistant_page_context_voices_unlimited">Unlimited voice messages</string>
   <string name="assistant_page_creative">Creative</string>
   <string name="assistant_page_current_assistant">Current Assistant</string>
   <string name="assistant_page_custom_bodies">Custom Body</string>

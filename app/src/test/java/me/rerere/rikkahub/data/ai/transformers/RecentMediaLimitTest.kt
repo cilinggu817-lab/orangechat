@@ -5,28 +5,72 @@ import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertSame
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class RecentMediaLimitTest {
     private fun voice(i: Int, transcript: String = "转写$i") =
         UIMessagePart.VoiceMessage(url = "/data/voice/$i.m4a", duration = 1000, transcript = transcript)
 
+    private fun image(i: Int) = UIMessagePart.Image("file:///upload/$i.png")
+
     private fun user(vararg parts: UIMessagePart) = UIMessage(role = MessageRole.USER, parts = parts.toList())
 
+    private fun keptImages(result: List<UIMessage>) = result.sumOf { m -> m.parts.count(::isHistoryUploadImage) }
+
     @Test
-    fun `under the limit returns the same list untouched`() {
-        val messages = (1..5).map { user(voice(it)) }
-        assertSame(messages, limitRecentAudio(messages))
+    fun `zero limit means unlimited and returns the same list`() {
+        val messages = (1..200).map { user(image(it)) }
+        assertSame(messages, limitRecentUploadImages(messages, 0))
     }
 
     @Test
-    fun `keeps newest five voices and turns older ones into transcripts`() {
+    fun `under the limit returns the same list untouched`() {
+        val messages = (1..20).map { user(voice(it)) }
+        assertSame(messages, limitRecentAudio(messages, 20))
+    }
+
+    @Test
+    fun `chunk size is half the limit capped at ten`() {
+        assertEquals(10, trimChunkSize(50))
+        assertEquals(10, trimChunkSize(20))
+        assertEquals(4, trimChunkSize(8))
+        assertEquals(3, trimChunkSize(5))
+        assertEquals(1, trimChunkSize(1))
+    }
+
+    @Test
+    fun `trims in whole chunks so the kept count stays in a window and never hits zero`() {
+        for (limit in listOf(1, 2, 3, 5, 8, 10, 20, 50, 120)) {
+            val chunk = trimChunkSize(limit)
+            for (total in 0..limit * 3 + 7) {
+                val kept = total - mediaToDowngrade(total, limit)
+                if (total <= limit) {
+                    assertEquals("limit=$limit total=$total", total, kept)
+                } else {
+                    assertTrue("limit=$limit total=$total kept=$kept", kept in (limit - chunk + 1)..limit)
+                }
+            }
+        }
+    }
+
+    @Test
+    fun `request prefix only changes once a whole chunk of new media arrives`() {
+        // 上限 50、每批 10：51..60 张都砍掉最旧的 10 张，前缀稳定
+        val dropped = (51..60).map { mediaToDowngrade(it, 50) }.toSet()
+        assertEquals(setOf(10), dropped)
+        assertEquals(20, mediaToDowngrade(61, 50))
+    }
+
+    @Test
+    fun `old voices become transcripts and newest stay audio`() {
         val messages = (1..8).map { user(UIMessagePart.Text("第$it句"), voice(it)) }
-        val result = limitRecentAudio(messages)
+        // 上限 5、每批 3：超出 3 条，砍最旧的 3 条
+        val result = limitRecentAudio(messages, 5)
 
         (0 until 3).forEach { index ->
-            assertEquals(UIMessagePart.Text("转写${index + 1}"), result[index].parts[1])
             assertEquals(UIMessagePart.Text("第${index + 1}句"), result[index].parts[0])
+            assertEquals(UIMessagePart.Text("转写${index + 1}"), result[index].parts[1])
         }
         (3 until 8).forEach { index -> assertSame(messages[index], result[index]) }
     }
@@ -34,53 +78,43 @@ class RecentMediaLimitTest {
     @Test
     fun `old voice without transcript becomes an honest placeholder`() {
         val messages = listOf(user(voice(0, transcript = ""))) + (1..5).map { user(voice(it)) }
-        val result = limitRecentAudio(messages)
+        val result = limitRecentAudio(messages, 5)
         assertEquals(UIMessagePart.Text(OLD_AUDIO_PLACEHOLDER), result[0].parts.single())
-    }
-
-    @Test
-    fun `counts multiple voices inside one message from oldest first`() {
-        val messages = listOf(user(voice(1), voice(2), voice(3)), user(voice(4), voice(5), voice(6)))
-        val result = limitRecentAudio(messages)
-        assertEquals(UIMessagePart.Text("转写1"), result[0].parts[0])
-        assertEquals(voice(2), result[0].parts[1])
-        assertSame(messages[1], result[1])
     }
 
     @Test
     fun `plain audio attachments share the same budget`() {
         val messages = listOf(user(UIMessagePart.Audio("file:///a/old.mp3"))) + (1..5).map { user(voice(it)) }
-        val result = limitRecentAudio(messages)
+        val result = limitRecentAudio(messages, 5)
         assertEquals(UIMessagePart.Text(OLD_AUDIO_PLACEHOLDER), result[0].parts.single())
     }
 
     @Test
-    fun `keeps newest five uploaded images and replaces older ones`() {
-        val messages = (1..7).map { user(UIMessagePart.Image("file:///upload/$it.png")) }
-        val result = limitRecentUploadImages(messages)
-        (0 until 2).forEach { assertEquals(UIMessagePart.Text(OLD_IMAGE_PLACEHOLDER), result[it].parts.single()) }
-        (2 until 7).forEach { assertSame(messages[it], result[it]) }
+    fun `old uploaded images become a text note`() {
+        val messages = (1..55).map { user(image(it)) }
+        val result = limitRecentUploadImages(messages, 50)
+        (0 until 10).forEach { assertEquals(UIMessagePart.Text(OLD_IMAGE_PLACEHOLDER), result[it].parts.single()) }
+        (10 until 55).forEach { assertSame(messages[it], result[it]) }
+        assertEquals(45, keptImages(result))
     }
 
     @Test
     fun `remote images and tool result images are not counted or replaced`() {
-        val toolImage = UIMessagePart.Image("file:///cache/screenshot.png")
-        val tool = UIMessagePart.Tool("t1", "take_screenshot", "{}", listOf(toolImage))
+        val tool = UIMessagePart.Tool("t1", "take_screenshot", "{}", listOf(image(0)))
         val remote = UIMessagePart.Image("https://example.com/a.png")
         val messages = listOf(
             UIMessage(role = MessageRole.ASSISTANT, parts = listOf(tool)),
             user(remote),
-        ) + (1..5).map { user(UIMessagePart.Image("file:///upload/$it.png")) }
+        ) + (1..5).map { user(image(it)) }
 
-        val result = limitRecentUploadImages(messages)
-        assertSame(messages, result)
+        assertSame(messages, limitRecentUploadImages(messages, 5))
     }
 
     @Test
     fun `stored history is not mutated`() {
-        val messages = (1..7).map { user(voice(it)) }
+        val messages = (1..30).map { user(voice(it)) }
         val snapshot = messages.map { it.copy() }
-        limitRecentAudio(messages)
+        limitRecentAudio(messages, 5)
         assertEquals(snapshot, messages)
     }
 }

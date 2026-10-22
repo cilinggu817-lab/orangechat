@@ -28,6 +28,8 @@ data class Assistant(
     val temperature: Float? = null,
     val topP: Float? = null,
     val contextMessageSize: Int = 0,
+    val maxContextImages: Int = 0, // 0 = 不限制；超出后较早的上传图片在请求里换成文字
+    val maxContextVoices: Int = 0, // 0 = 不限制；超出后较早的语音在请求里换成转写
     val streamOutput: Boolean = true,
     val enableAvatarInteractions: Boolean = true,
     val enableMessageReactions: Boolean = true,
