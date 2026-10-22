@@ -1,12 +1,12 @@
 package me.rerere.rikkahub.data.ai
 
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.provider.Model
 import me.rerere.ai.provider.ProviderSetting
 import me.rerere.ai.ui.UIMessage
+import me.rerere.ai.util.HttpException
 import me.rerere.ai.ui.UIMessagePart
 import me.rerere.rikkahub.data.ai.prompts.DEFAULT_COMPRESS_PROMPT
 import me.rerere.rikkahub.data.ai.prompts.LEGACY_DEFAULT_COMPRESS_PROMPT
@@ -46,56 +46,55 @@ class CompressionInputTest {
         assertTrue(input.contains("report.pdf"))
     }
 
-    @Test fun `long single message is chunked without loss or broken unicode`() {
-        val original = "a".repeat(COMPRESSION_INPUT_CHARS - 1) + "🍊" + "b".repeat(COMPRESSION_INPUT_CHARS)
-        val chunks = splitCompressionInput(listOf(original))
-        assertEquals(original, chunks.joinToString(""))
-        assertTrue(chunks.size > 1)
-        assertTrue(chunks.all { it.length <= COMPRESSION_INPUT_CHARS })
-        assertTrue(chunks.none { it.last().isHighSurrogate() || it.first().isLowSurrogate() })
-    }
-
-    @Test fun `chunking preserves message ordering delimiters and whitespace`() {
-        val texts = listOf("[USER]: first\n  indented", "[ASSISTANT]: second\n", "[USER]: last")
-        assertEquals(texts.joinToString("\n\n"), splitCompressionInput(texts, 18).joinToString(""))
-    }
-
-    @Test fun `large input is reduced in order with at most two parallel requests`() = runBlocking {
-        var active = 0
-        var maxActive = 0
+    @Test fun `seventy large messages including tools are sent in one lossless request`() = runBlocking {
+        val texts = (1..70).map { index ->
+            UIMessage.assistant("Message $index: " + "正文🍊\n".repeat(800)).let {
+                it.copy(parts = it.parts + UIMessagePart.Tool("tool$index", "read", "{query:$index}",
+                    listOf(UIMessagePart.Text("result$index: " + "tool data ".repeat(80)))))
+            }.compressionTranscript()
+        }
         val inputs = mutableListOf<String>()
-        val result = compressTextChunks(listOf("a".repeat(COMPRESSION_INPUT_CHARS), "b".repeat(COMPRESSION_INPUT_CHARS))) { input ->
-            inputs += input
-            active++
-            maxActive = maxOf(maxActive, active)
-            delay(5)
-            active--
-            when {
-                input.startsWith("a") -> "FIRST"
-                input.startsWith("b") -> "SECOND"
-                else -> "DONE"
-            }
-        }
-        assertTrue(maxActive <= 2)
-        assertEquals("DONE", result)
-        assertTrue(inputs.all { it.length <= COMPRESSION_INPUT_CHARS })
-        assertTrue(inputs.last().indexOf("FIRST") < inputs.last().indexOf("SECOND"))
+        assertEquals("SUMMARY", compressTextOnce(texts) { inputs += it; "SUMMARY" })
+        assertEquals(1, inputs.size)
+        assertEquals(texts.joinToString("\n\n"), inputs.single())
+        assertTrue(inputs.single().length > 24_000 * 12)
+        assertTrue(inputs.single().contains("result70:"))
     }
 
-    @Test fun `non shrinking provider aborts instead of looping indefinitely`() = runBlocking {
+    @Test fun `whole input preserves ordering whitespace and supplementary unicode`() = runBlocking {
+        val texts = listOf("[USER]: first🍊\n  indented", "[ASSISTANT]: second\n", "[USER]: last")
         var calls = 0
-        val result = runCatching {
-            compressTextChunks(listOf("x".repeat(COMPRESSION_INPUT_CHARS * 2))) { calls++; it }
+        compressTextOnce(texts) {
+            calls++
+            assertEquals(texts.joinToString("\n\n"), it)
+            "SUMMARY"
         }
-        assertTrue(result.exceptionOrNull() is IllegalStateException)
-        assertEquals(2, calls)
+        assertEquals(1, calls)
+    }
+
+    @Test fun `context rejection and network failures propagate without splitting or retrying`() = runBlocking {
+        for (failure in listOf(HttpException("maximum context length exceeded"),
+            HttpException("429 rate limit"), java.io.IOException("timeout"))) {
+            var calls = 0
+            val result = runCatching {
+                compressTextOnce(listOf("x".repeat(300_000))) { calls++; throw failure }
+            }
+            assertSame(failure, result.exceptionOrNull())
+            assertEquals(1, calls)
+        }
+    }
+
+    @Test fun `blank input is rejected before making a provider request`() = runBlocking {
+        var calls = 0
+        assertTrue(runCatching { compressTextOnce(listOf(" ", "\n")) { calls++; "summary" } }.isFailure)
+        assertEquals(0, calls)
     }
 
     @Test fun `empty result aborts and cancellation propagates`() = runBlocking {
-        assertTrue(runCatching { compressTextChunks(listOf("source")) { " " } }.isFailure)
+        assertTrue(runCatching { compressTextOnce(listOf("source")) { " " } }.isFailure)
         val cancellation = CancellationException("cancel")
         val propagated = runCatching {
-            compressTextChunks(listOf("source")) { throw cancellation }
+            compressTextOnce(listOf("source")) { throw cancellation }
         }.exceptionOrNull()
         assertTrue(propagated is CancellationException)
         assertEquals(cancellation.message, propagated?.message)

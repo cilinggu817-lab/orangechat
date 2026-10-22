@@ -49,6 +49,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -60,14 +61,20 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import coil3.compose.AsyncImage
 import kotlinx.coroutines.launch
 import me.rerere.rikkahub.data.db.entity.ManagedFileEntity
 import me.rerere.rikkahub.R
 import me.rerere.rikkahub.data.files.FileFolders
 import me.rerere.rikkahub.data.files.FilesManager
+import me.rerere.rikkahub.diagnostics.LoadingDiagnostics
+import me.rerere.rikkahub.diagnostics.TaskWatchdog
 import me.rerere.rikkahub.ui.components.nav.BackButton
 import me.rerere.rikkahub.ui.context.LocalToaster
 import me.rerere.rikkahub.ui.theme.CustomColors
@@ -388,7 +395,7 @@ private fun folderDisplayName(folder: String): String = when (folder) {
 }
 
 @Composable
-private fun FileItem(
+internal fun FileItem(
     file: ManagedFileEntity,
     fileOnDisk: File,
     onDelete: () -> Unit,
@@ -397,6 +404,26 @@ private fun FileItem(
     enabled: Boolean,
     onSelectedChange: (Boolean) -> Unit,
 ) {
+    val context = LocalContext.current
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    var previewLoading by remember(fileOnDisk) { mutableStateOf(false) }
+    DisposableEffect(fileOnDisk, lifecycle, previewLoading) {
+        var trace: TaskWatchdog.Trace? = null
+        fun updateTrace() {
+            if (previewLoading && lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) {
+                if (trace == null) trace = LoadingDiagnostics.begin(context, "files.preview").apply {
+                    stage("waiting for local image request while visible")
+                }
+            } else {
+                trace?.close()
+                trace = null
+            }
+        }
+        val observer = LifecycleEventObserver { _, _ -> updateTrace() }
+        lifecycle.addObserver(observer)
+        updateTrace()
+        onDispose { lifecycle.removeObserver(observer); trace?.close() }
+    }
     Card(
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(containerColor = CustomColors.listItemColors.containerColor)
@@ -412,7 +439,10 @@ private fun FileItem(
                         modifier = Modifier
                             .fillMaxWidth()
                             .aspectRatio(4f / 3f),
-                        contentScale = ContentScale.Crop
+                        contentScale = ContentScale.Crop,
+                        onLoading = { previewLoading = true },
+                        onSuccess = { previewLoading = false },
+                        onError = { previewLoading = false },
                     )
                 } else {
                     Box(

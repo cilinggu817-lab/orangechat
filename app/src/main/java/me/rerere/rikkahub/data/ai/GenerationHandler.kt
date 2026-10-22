@@ -60,6 +60,7 @@ import me.rerere.rikkahub.data.model.Assistant
 import me.rerere.rikkahub.data.model.AssistantMemory
 import me.rerere.rikkahub.data.repository.ConversationRepository
 import me.rerere.rikkahub.data.repository.MemoryRepository
+import me.rerere.rikkahub.data.interaction.ChatInteractionRepository
 import me.rerere.rikkahub.utils.applyPlaceholders
 import java.util.Locale
 import kotlin.time.Clock
@@ -89,6 +90,7 @@ class GenerationHandler(
     private val aiLoggingManager: AILoggingManager,
     private val memoryBankService: MemoryBankService,
     private val filesManager: me.rerere.rikkahub.data.files.FilesManager,
+    private val chatInteractionRepository: ChatInteractionRepository,
 ) {
     fun generateText(
         settings: Settings,
@@ -119,44 +121,35 @@ class GenerationHandler(
             emit(GenerationChunk.Messages(messages))
         }
  
-        for (stepIndex in 0 until maxSteps) {
-            Log.i(TAG, "streamText: start step #$stepIndex (${model.id})")
- 
-            val toolsInternal = buildList {
-                Log.i(TAG, "generateInternal: build tools($assistant)")
-                if (assistant?.enableMemory == true) {
-                    val memoryAssistantId = if (assistant.useGlobalMemory) {
-                        MemoryRepository.GLOBAL_MEMORY_ID
-                    } else {
-                        assistant.id.toString()
-                    }
-                    buildMemoryTools(
-                        json = json,
-                        onCreation = { content ->
-                            memoryRepo.addMemory(memoryAssistantId, content)
-                        },
-                        onUpdate = { id, content ->
-                            memoryRepo.updateContent(id, content)
-                        },
-                        onDelete = { id ->
-                            memoryRepo.deleteMemory(id)
+        messages = runGenerationToolLoop(
+            initialMessages = messages,
+            maxSteps = maxSteps,
+            resumeApprovedTools = true,
+            toolsForStep = { stepIndex ->
+                Log.i(TAG, "streamText: build tools for step #$stepIndex (${model.id})")
+                buildList {
+                    if (assistant.enableMemory) {
+                        val memoryAssistantId = if (assistant.useGlobalMemory) {
+                            MemoryRepository.GLOBAL_MEMORY_ID
+                        } else {
+                            assistant.id.toString()
                         }
-                    ).let(this::addAll)
+                        addAll(buildMemoryTools(
+                            json = json,
+                            onCreation = { content -> memoryRepo.addMemory(memoryAssistantId, content) },
+                            onUpdate = { id, content -> memoryRepo.updateContent(id, content) },
+                            onDelete = { id -> memoryRepo.deleteMemory(id) },
+                        ))
+                    }
+                    add(buildWriteFilesTool(conversationId))
+                    addAll(tools)
                 }
-                // 文件写入工具 - AI可直接将文件内容写入设备或打包ZIP
-                add(buildWriteFilesTool(conversationId))
-                addAll(tools)
-            }
- 
-            // Approval pauses the whole batch, including automatic calls. Finish it
-            // through the current approval policy before requesting another model turn.
-            val unfinishedTools = messages.unfinishedGenerationTools()
-
-            if (unfinishedTools.isEmpty()) {
+            },
+            generateTurn = { turnMessages, toolsInternal, _ ->
                 generateInternal(
                     assistant = assistant,
                     settings = settings,
-                    messages = messages,
+                    messages = turnMessages,
                     pluginPromptInjections = pluginPromptInjections,
                     onUpdateMessages = {
                         messages = it.transforms(
@@ -164,19 +157,15 @@ class GenerationHandler(
                             context = context,
                             model = model,
                             assistant = assistant,
-                            settings = settings
+                            settings = settings,
                         )
-                        emit(
-                            GenerationChunk.Messages(
-                                messages.visualTransforms(
-                                    transformers = outputTransformers,
-                                    context = context,
-                                    model = model,
-                                    assistant = assistant,
-                                    settings = settings
-                                )
-                            )
-                        )
+                        emit(GenerationChunk.Messages(messages.visualTransforms(
+                            transformers = outputTransformers,
+                            context = context,
+                            model = model,
+                            assistant = assistant,
+                            settings = settings,
+                        )))
                     },
                     transformers = inputTransformers,
                     model = model,
@@ -196,75 +185,60 @@ class GenerationHandler(
                     context = context,
                     model = model,
                     assistant = assistant,
-                    settings = settings
+                    settings = settings,
                 )
                 messages = messages.onGenerationFinish(
                     transformers = outputTransformers,
                     context = context,
                     model = model,
                     assistant = assistant,
-                    settings = settings
+                    settings = settings,
                 )
-                messages = messages.slice(0 until messages.lastIndex) + messages.last().copy(
-                    finishedAt = Clock.System.now()
-                        .toLocalDateTime(TimeZone.currentSystemDefault())
+                messages = messages.dropLast(1) + messages.last().copy(
+                    finishedAt = Clock.System.now().toLocalDateTime(TimeZone.currentSystemDefault()),
                 )
                 emit(GenerationChunk.Messages(messages))
-            } else {
-                Log.i(TAG, "generateText: resuming with ${unfinishedTools.size} unfinished tools")
-            }
-
-            val tools = messages.unfinishedGenerationTools()
-            if (tools.isEmpty()) break
-
-            val approval = prepareGenerationToolApproval(
-                calls = tools,
-                definitions = toolsInternal,
-                autoApproveAllTools = settings.autoApproveAllTools,
-                forceConfirmToolCalls = settings.forceConfirmToolCalls,
-            )
-            if (approval.calls != tools) {
-                messages = messages.replaceLastGenerationTools(approval.calls)
-            }
-            if (approval.calls != tools || approval.waitingForApproval) {
-                withContext(NonCancellable) { onToolCheckpoint?.invoke(messages) }
-                emit(GenerationChunk.Messages(messages))
-            }
-            if (approval.waitingForApproval) {
-                Log.i(TAG, "generateText: waiting for tool approval")
-                break
-            }
-
-            val executedTools = executeGenerationToolBatch(
-                approval = approval,
-                definitions = toolsInternal,
-                json = json,
-                onCheckpoint = { call ->
-                    val checkpointed = messages.replaceLastGenerationTools(listOf(call))
-                    onToolCheckpoint?.invoke(checkpointed)
-                    messages = checkpointed
-                },
-            )
- 
-            if (executedTools.isEmpty()) {
-                // No results to add (all tools were pending)
-                break
-            }
- 
-            // Update last message with executed tools (NOT create TOOL message)
-            messages = messages.replaceLastGenerationTools(executedTools)
-            emit(
-                GenerationChunk.Messages(
-                    messages.transforms(
-                        transformers = outputTransformers,
-                        context = context,
-                        model = model,
-                        assistant = assistant,
-                        settings = settings
-                    )
+                messages
+            },
+            prepareTools = { calls, definitions ->
+                prepareGenerationToolApproval(
+                    calls = calls,
+                    definitions = definitions,
+                    autoApproveAllTools = settings.autoApproveAllTools,
+                    forceConfirmToolCalls = settings.forceConfirmToolCalls,
                 )
-            )
-        }
+            },
+            executeTool = { call, definition, _ ->
+                executeGenerationToolBatch(
+                    approval = GenerationToolApproval(listOf(call)),
+                    definitions = listOfNotNull(definition),
+                    json = json,
+                    onCheckpoint = { checkpointedTool ->
+                        val checkpointed = messages.replaceLastGenerationTools(listOf(checkpointedTool))
+                        withContext(NonCancellable) { onToolCheckpoint?.invoke(checkpointed) }
+                        messages = checkpointed
+                    },
+                ).singleOrNull() ?: call
+            },
+            onToolsUpdated = { updated, update ->
+                messages = updated
+                when (update) {
+                    GenerationToolUpdate.APPROVAL -> {
+                        withContext(NonCancellable) { onToolCheckpoint?.invoke(updated) }
+                        emit(GenerationChunk.Messages(updated))
+                    }
+                    GenerationToolUpdate.RESULTS -> emit(GenerationChunk.Messages(
+                        updated.transforms(
+                            transformers = outputTransformers,
+                            context = context,
+                            model = model,
+                            assistant = assistant,
+                            settings = settings,
+                        )
+                    ))
+                }
+            },
+        )
  
     }.throttleLatest(STREAM_UI_THROTTLE_MS)
         .flowOn(Dispatchers.IO)
@@ -288,7 +262,7 @@ class GenerationHandler(
         workspaceCwd: String? = null,
         conversationId: String? = null,
     ) {
-        val internalMessages = buildList {
+        val baseMessages = buildList {
             val system = buildString {
                 val effectiveSystemPrompt =
                     if (assistant.allowConversationSystemPrompt && !conversationSystemPrompt.isNullOrBlank()) {
@@ -459,7 +433,13 @@ class GenerationHandler(
  
             }
             addAll(buildConversationRequestMessages(system, messages, assistant.contextMessageSize, conversationContextSummary))
-        }.let { filesManager.validAttachments(it, forSending = true) }.transforms(
+        }
+        val internalMessages = chatInteractionRepository.decorate(
+            baseMessages,
+            conversationId,
+            assistant,
+            sourceMessages = messages,
+        ).let { filesManager.validAttachments(it, forSending = true) }.transforms(
             transformers = transformers,
             context = context,
             model = model,
@@ -477,60 +457,25 @@ class GenerationHandler(
             conversationId = conversationId,
             tools = tools,
         )
-        if (stream) {
-            aiLoggingManager.addLog(
-                AILogging.Generation(
-                    params = params,
-                    messages = messages,
-                    providerSetting = provider,
-                    stream = true
-                )
-            )
-            providerImpl.streamText(
-                providerSetting = provider,
-                messages = internalMessages,
-                params = params
-            ).collect {
-                messages = messages.handleMessageChunk(chunk = it, model = model)
-                it.usage?.let { usage ->
-                    messages = messages.mapIndexed { index, message ->
-                        if (index == messages.lastIndex) {
-                            message.copy(usage = message.usage.merge(usage))
-                        } else {
-                            message
-                        }
-                    }
-                }
-                onUpdateMessages(messages)
-            }
-        } else {
-            aiLoggingManager.addLog(
-                AILogging.Generation(
-                    params = params,
-                    messages = messages,
-                    providerSetting = provider,
-                    stream = false
-                )
-            )
-            val chunk = providerImpl.generateText(
-                providerSetting = provider,
-                messages = internalMessages,
+        aiLoggingManager.addLog(
+            AILogging.Generation(
                 params = params,
+                messages = messages,
+                providerSetting = provider,
+                stream = stream,
             )
-            messages = messages.handleMessageChunk(chunk = chunk, model = model)
-            chunk.usage?.let { usage ->
-                messages = messages.mapIndexed { index, message ->
-                    if (index == messages.lastIndex) {
-                        message.copy(
-                            usage = message.usage.merge(usage)
-                        )
-                    } else {
-                        message
-                    }
-                }
-            }
-            onUpdateMessages(messages)
-        }
+        )
+        messages = generateModelTurn(
+            providerImpl = providerImpl,
+            providerSetting = provider,
+            requestMessages = internalMessages,
+            initialMessages = messages,
+            params = params,
+            model = model,
+            stream = stream,
+            mergeUsage = true,
+            onUpdateMessages = onUpdateMessages,
+        )
     }
  
     fun translateText(

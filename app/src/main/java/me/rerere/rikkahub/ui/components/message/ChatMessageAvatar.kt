@@ -75,6 +75,7 @@ fun ChatMessageUserAvatar(
     avatar: Avatar,
     nickname: String,
     modifier: Modifier = Modifier,
+    interactionModifier: Modifier = Modifier,
 ) {
     val settings = LocalSettings.current
     if (message.role == MessageRole.USER && !message.parts.isEmptyUIMessage() && settings.displaySetting.showUserAvatar) {
@@ -102,11 +103,12 @@ fun ChatMessageUserAvatar(
                     )
                 }
             }
-            Box(contentAlignment = Alignment.Center) {
+            Box(modifier = interactionModifier, contentAlignment = Alignment.Center) {
                 UIAvatar(
                     name = nickname,
                     modifier = Modifier.size(36.dp),
                     value = avatar,
+                    interactive = false,
                     loading = false,
                 )
                 AvatarFrameOverlay(
@@ -128,6 +130,7 @@ fun ChatMessageAssistantAvatar(
     model: Model?,
     assistant: Assistant?,
     modifier: Modifier = Modifier,
+    interactionModifier: Modifier = Modifier,
 ) {
     val settings = LocalSettings.current
     val showIcon = settings.displaySetting.showModelIcon
@@ -140,11 +143,12 @@ fun ChatMessageAssistantAvatar(
         ) {
             if (useAssistantAvatar) {
                 if (showIcon) {
-                    Box(contentAlignment = Alignment.Center) {
+                    Box(modifier = interactionModifier, contentAlignment = Alignment.Center) {
                         UIAvatar(
                             name = assistant.name,
                             modifier = Modifier.size(32.dp),
                             value = assistant.avatar,
+                            interactive = false,
                             loading = loading,
                         )
                         AvatarFrameOverlay(
@@ -177,7 +181,7 @@ fun ChatMessageAssistantAvatar(
                 }
             } else if (model != null) {
                 if (showIcon) {
-                    Box(contentAlignment = Alignment.Center) {
+                    Box(modifier = interactionModifier, contentAlignment = Alignment.Center) {
                         AutoAIIcon(
                             name = model.modelId,
                             modifier = Modifier.size(32.dp),

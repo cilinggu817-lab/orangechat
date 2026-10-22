@@ -26,12 +26,16 @@ class SettingVM(
     ViewModel() {
     val settings: StateFlow<Settings> = settingsStore.settingsFlow
 
-    fun updateDisplaySetting(
-        previous: me.rerere.rikkahub.data.datastore.DisplaySetting,
-        desired: me.rerere.rikkahub.data.datastore.DisplaySetting,
-    ) {
-        val baseline = settings.value.copy(displaySetting = previous)
-        updateSettings(baseline, baseline.copy(displaySetting = desired))
+    fun updateDisplaySetting(desired: me.rerere.rikkahub.data.datastore.DisplaySetting) {
+        // Display controls are scalar edits. Going through updateFrom() would
+        // JSON-encode and merge the entire Settings object for every switch tap.
+        // Update against the store's latest snapshot so concurrent edits are
+        // still preserved without the full editor merge.
+        viewModelScope.launch {
+            settingsStore.update { current ->
+                current.copy(displaySetting = desired)
+            }
+        }
     }
 
     fun updateSettings(settings: Settings) {

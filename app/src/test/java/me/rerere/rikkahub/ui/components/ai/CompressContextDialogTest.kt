@@ -34,12 +34,12 @@ class CompressContextDialogTest {
         compose.setContent { CompositionLocalProvider(LocalSettings provides Settings()) { MaterialTheme {
             CompressContextDialog({ dismissed = true }) { _, _, _, _, progress ->
                 calls++
-                progress("压缩聊天记录 · 第 1 轮：已完成 0/3 批")
+                progress("正在整段压缩聊天记录（含工具内容）…")
                 if (calls == 1) { result.await(); error("模型请求超时，原文未修改") }
             }
         } } }
         compose.onNodeWithText(confirm).performClick()
-        compose.onNodeWithText("压缩聊天记录 · 第 1 轮：已完成 0/3 批").assertIsDisplayed()
+        compose.onNodeWithText("正在整段压缩聊天记录（含工具内容）…").assertIsDisplayed()
         compose.runOnIdle { result.complete(Unit) }
         compose.onNodeWithText("模型请求超时，原文未修改").assertIsDisplayed()
         compose.onNodeWithText(confirm).assertIsEnabled()

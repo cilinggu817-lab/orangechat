@@ -597,23 +597,27 @@ class ConversationRepository(
         repaired
     }
 
-    /** Each read is complete (including oversized rows), and each update is compare-and-set. */
-    suspend fun repairInvalidAttachments(): Int = withContext(Dispatchers.IO) {
+    suspend fun repairInvalidAttachments(): Int = repairInvalidAttachments { filesManager.validAttachments(it) }
+
+    /** Read a consistent node, scan outside the writer transaction, then compare-and-set its JSON. */
+    internal suspend fun repairInvalidAttachments(
+        scanAttachments: suspend (List<UIMessage>) -> List<UIMessage>,
+    ): Int = withContext(Dispatchers.IO) {
         var repaired = 0
         for (conversationId in conversationDAO.getAllIds()) {
             for (id in messageNodeDAO.getNodeIdsOfConversation(conversationId)) {
-                database.withTransaction {
-                    val entity = messageNodeDAO.loadCompleteNode(id) ?: return@withTransaction
-                    val original = JsonInstant.decodeFromString<List<UIMessage>>(entity.messages)
-                    check(original.isNotEmpty() && entity.selectIndex in original.indices) {
-                        "会话包含无法读取的消息，附件清理已停止，原始消息未被覆盖。"
-                    }
-                    val cleaned = filesManager.validAttachments(original)
-                    if (cleaned !== original) {
-                        repaired += messageNodeDAO.repairAttachments(
-                            entity.id, entity.messages, JsonInstant.encodeToString(cleaned),
-                        )
-                    }
+                val entity = database.withTransaction { messageNodeDAO.loadCompleteNode(id) } ?: continue
+                val original = JsonInstant.decodeFromString<List<UIMessage>>(entity.messages)
+                check(original.isNotEmpty() && entity.selectIndex in original.indices) {
+                    "会话包含无法读取的消息，附件清理已停止，原始消息未被覆盖。"
+                }
+                // File reads and native image decoding can be slow. Do not hold Room's writer
+                // while checking them; a concurrent stream/branch edit wins the conditional write.
+                val cleaned = scanAttachments(original)
+                if (cleaned !== original) {
+                    repaired += messageNodeDAO.repairAttachments(
+                        entity.id, entity.messages, JsonInstant.encodeToString(cleaned),
+                    )
                 }
             }
         }

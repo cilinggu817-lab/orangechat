@@ -117,6 +117,7 @@ fun PluginWebViewPage(
     var customVideoView by remember { mutableStateOf<View?>(null) }
     var customVideoCallback by remember { mutableStateOf<WebChromeClient.CustomViewCallback?>(null) }
     var pendingImageCallback by remember { mutableStateOf<String?>(null) }
+    var pendingImagesCallback by remember { mutableStateOf<String?>(null) }
     var pendingFileCallback by remember { mutableStateOf<String?>(null) }
     var pendingBinaryFileCallback by remember { mutableStateOf<String?>(null) }
     var pendingImportAudioCallback by remember { mutableStateOf<String?>(null) }
@@ -269,6 +270,34 @@ fun PluginWebViewPage(
         pendingImageCallback = null
     }
 
+    // Multi-image API returns an array; keep pickImage's existing scalar result compatible.
+    val pickImagesLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickMultipleVisualMedia()
+    ) { uris ->
+        val callbackId = pendingImagesCallback
+        pendingImagesCallback = null
+        if (callbackId != null) {
+            scope.launch {
+                try {
+                    val javascript = withContext(Dispatchers.IO) {
+                        val images = JSONArray(uris.map { uri ->
+                            context.contentResolver.openInputStream(uri)?.use {
+                                Base64.encodeToString(it.readBytes(), Base64.NO_WRAP)
+                            } ?: error("Cannot read selected image")
+                        })
+                        pluginBridgeResultJavascript(callbackId, images)
+                    }
+                    webView?.evaluateJavascript(javascript, null)
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (error: Exception) {
+                    Log.e(TAG, "Failed to process picked images", error)
+                    webView?.evaluateJavascript(pluginBridgeResultJavascript(callbackId, null), null)
+                }
+            }
+        }
+    }
+
     // Launcher for binary file picking (Bridge.pickBinaryFile)
     val binaryFilePickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
@@ -408,17 +437,11 @@ fun PluginWebViewPage(
 
     // Launcher for native HTML <input type="file"> file chooser
     val htmlFileChooserLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.OpenDocument()
-    ) { uri: Uri? ->
+        contract = PluginHtmlFileChooser()
+    ) { uris ->
         val callback = webViewFileChooserCallback
-        if (callback != null) {
-            if (uri != null) {
-                callback.onReceiveValue(arrayOf(uri))
-            } else {
-                callback.onReceiveValue(null)
-            }
-            webViewFileChooserCallback = null
-        }
+        webViewFileChooserCallback = null
+        callback?.onReceiveValue(uris)
     }
 
     Scaffold(
@@ -544,6 +567,22 @@ fun PluginWebViewPage(
                                     pickImageLauncher.launch(
                                         PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
                                     )
+                                },
+                                onPickImages = { callbackId ->
+                                    if (pendingImagesCallback != null) {
+                                        webView?.evaluateJavascript(pluginBridgeResultJavascript(callbackId, null), null)
+                                    } else {
+                                        pendingImagesCallback = callbackId
+                                        try {
+                                            pickImagesLauncher.launch(
+                                                PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                                            )
+                                        } catch (error: Exception) {
+                                            pendingImagesCallback = null
+                                            Log.e(TAG, "Cannot open multi-image picker", error)
+                                            webView?.evaluateJavascript(pluginBridgeResultJavascript(callbackId, null), null)
+                                        }
+                                    }
                                 },
                                 onPickFile = { callbackId ->
                                     pendingFileCallback = callbackId
@@ -829,15 +868,15 @@ fun PluginWebViewPage(
                                     webViewFileChooserCallback?.onReceiveValue(null)
                                     webViewFileChooserCallback = filePathCallback
 
-                                    val acceptTypes = fileChooserParams?.acceptTypes
-                                        ?.filter { it.isNotBlank() }
-                                        ?.toTypedArray()
-                                        ?: arrayOf("*/*")
-                                    // If no meaningful accept types, use */*
-                                    if (acceptTypes.isEmpty()) {
-                                        htmlFileChooserLauncher.launch(arrayOf("*/*"))
-                                    } else {
-                                        htmlFileChooserLauncher.launch(acceptTypes)
+                                    try {
+                                        htmlFileChooserLauncher.launch(PluginHtmlFileRequest(
+                                            acceptTypes = fileChooserParams?.acceptTypes ?: emptyArray(),
+                                            mode = fileChooserParams?.mode,
+                                        ))
+                                    } catch (error: Exception) {
+                                        webViewFileChooserCallback = null
+                                        filePathCallback?.onReceiveValue(null)
+                                        Log.e(TAG, "Cannot open HTML file picker", error)
                                     }
                                     return true
                                 }
@@ -871,6 +910,7 @@ fun PluginWebViewPage(
     DisposableEffect(pluginId, htmlEntryPath) {
         onDispose {
             pendingImageCallback = null
+            pendingImagesCallback = null
             pendingFileCallback = null
             pendingBinaryFileCallback = null
             pendingImportAudioCallback = null
@@ -911,6 +951,7 @@ private class PluginWebViewClient(
     private val onCaptureWatchFrame: (callbackId: String, left: Int, top: Int, width: Int, height: Int) -> Unit,
     private val scope: CoroutineScope,
     private val onPickImage: (callbackId: String) -> Unit,
+    private val onPickImages: (callbackId: String) -> Unit,
     private val onPickFile: (callbackId: String) -> Unit,
     private val onPickBinaryFile: (callbackId: String) -> Unit,
     private val onImportAudioFile: (callbackId: String) -> Unit,
@@ -1093,6 +1134,11 @@ private class PluginWebViewClient(
             "pickImage" -> {
                 val callbackId = params["callbackId"] ?: ""
                 onPickImage(callbackId)
+            }
+
+            "pickImages" -> {
+                val callbackId = params["callbackId"] ?: ""
+                onPickImages(callbackId)
             }
 
             "pickFile" -> {
@@ -1821,6 +1867,9 @@ private const val bridgeJavascript = """
         },
         pickImage: function() {
             return bridgeCall('pickImage', {});
+        },
+        pickImages: function() {
+            return bridgeCall('pickImages', {});
         },
         pickFile: function() {
             return bridgeCall('pickFile', {});

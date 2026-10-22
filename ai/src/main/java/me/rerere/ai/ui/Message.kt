@@ -787,6 +787,15 @@ fun <T> List<T>.migrateToolNodes(
 
 @Serializable
 sealed class UIMessageAnnotation {
+    /** Preserve sibling-fork backup metadata without turning it into a citation or model input. */
+    @Serializable
+    @SerialName("avatar_interaction")
+    data class AvatarInteraction(
+        val actor: String,
+        val target: String,
+        val targetMessageId: String? = null,
+    ) : UIMessageAnnotation()
+
     @Serializable
     @SerialName("url_citation")
     data class UrlCitation(

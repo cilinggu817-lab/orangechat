@@ -1,4 +1,4 @@
-﻿/*
+/*
  * 橘瓣 OrangeChat
  * 衍生自 RikkaHub (https://github.com/rikkahub/rikkahub)，原作者 RE
  * 本项目基于 GNU AGPL v3 开源，详见根目录 LICENSE 文件
@@ -91,7 +91,7 @@ fun CompressContextDialog(
                         Column {
                             Text(stringResource(R.string.chat_page_compressing))
                             Text(progress, style = MaterialTheme.typography.bodySmall)
-                            Text("长对话会分批处理；单批最多等待 3 分钟，可随时取消。",
+                            Text("整段一次提交，保留工具内容；单次最多等待 3 分钟，可随时取消。",
                                 style = MaterialTheme.typography.bodySmall)
                         }
                     }

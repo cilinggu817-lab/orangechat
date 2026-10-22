@@ -17,6 +17,7 @@ import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -140,10 +141,13 @@ class AutoBackupWorker(context: Context, params: WorkerParameters) : CoroutineWo
         val partial = checkNotNull(DocumentsContract.createDocument(resolver, root, "application/zip", "$name.partial"))
         var completed = false
         try {
-            checkNotNull(resolver.openOutputStream(partial, "w")).use { output ->
-                zip.inputStream().use { input -> check(input.copyTo(output) == zip.length()) }
-            }
-            checkNotNull(DocumentsContract.renameDocument(resolver, partial, name))
+            VerifiedBackupWriter.copyAndVerify(
+                file = zip,
+                output = { checkNotNull(resolver.openOutputStream(partial, "w")) { "无法写入备份文件" } },
+                readBack = { checkNotNull(resolver.openInputStream(partial)) { "无法读回备份文件" } },
+                checkActive = { coroutineContext.ensureActive() },
+            )
+            checkNotNull(DocumentsContract.renameDocument(resolver, partial, name)) { "无法发布已验证备份" }
             completed = true
         } finally {
             if (!completed) runCatching { DocumentsContract.deleteDocument(resolver, partial) }

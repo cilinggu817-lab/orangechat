@@ -64,11 +64,11 @@ class CompressionEngineTest {
         }.isFailure)
     }
 
-    @Test fun `operation deadline covers all otherwise successful chunks`() = runBlocking {
+    @Test fun `operation deadline aborts before saving`() = runBlocking {
         var saved = false
         val failure = runCatching {
             withCompressionDeadline(100) {
-                compressTextChunks(listOf("x".repeat(COMPRESSION_INPUT_CHARS * 2))) { delay(1000); "summary" }
+                compressTextOnce(listOf("x".repeat(48_000))) { delay(1000); "summary" }
                 saved = true
                 Unit
             }
@@ -77,11 +77,13 @@ class CompressionEngineTest {
         assertTrue(failure?.message.orEmpty().contains("超时"))
     }
 
-    @Test fun `progress records completed batches across reduction rounds`() = runBlocking {
-        val progress = mutableListOf<String>()
-        compressTextChunksWithProgress(listOf("x".repeat(COMPRESSION_INPUT_CHARS * 2)), { progress += it }) { "summary" }
-        assertTrue(progress.first().contains("0/2"))
-        assertTrue(progress.any { it.contains("2/2") })
-        assertTrue(progress.last().contains("1/1"))
+    @Test fun `successful full text response is used without an extra reduction request`() = runBlocking {
+        var calls = 0
+        val result = compressTextOnce(listOf("x".repeat(300_000))) {
+            calls++
+            collectCompressionSummary { flowOf(delta("whole summary", "stop")) }
+        }
+        assertEquals("whole summary", result)
+        assertEquals(1, calls)
     }
 }

@@ -111,6 +111,7 @@ import me.rerere.rikkahub.data.datastore.findProvider
 import me.rerere.rikkahub.data.datastore.getCurrentAssistant
 import me.rerere.rikkahub.data.datastore.getCurrentChatModel
 import me.rerere.rikkahub.data.files.FilesManager
+import me.rerere.rikkahub.data.interaction.effectiveChatReactionPresets
 import me.rerere.rikkahub.data.model.Conversation
 import me.rerere.rikkahub.service.ChatError
 import me.rerere.rikkahub.service.VoiceCallService
@@ -348,6 +349,10 @@ private fun ChatPageContent(
     onDismissError: (Uuid) -> Unit,
     onClearAllErrors: () -> Unit,
 ) {
+    val reactions by vm.reactions.collectAsStateWithLifecycle()
+    val reactionPresets = remember(setting.customReactionPresets) {
+        effectiveChatReactionPresets(setting.customReactionPresets)
+    }
     val scope = rememberCoroutineScope()
     val toaster = LocalToaster.current
     var previewMode by rememberSaveable { mutableStateOf(false) }
@@ -449,12 +454,19 @@ private fun ChatPageContent(
             modifier = Modifier
                 .fillMaxSize()
                 .onGloballyPositioned { coordinates ->
-                    overlayOriginInWindow = coordinates.positionInWindow()
+                    val origin = coordinates.positionInWindow()
+                    if (origin != overlayOriginInWindow) {
+                        overlayOriginInWindow = origin
+                    }
                     // 气泡真实背景模糊：记录背景容器（内容 Box）窗口原点与像素尺寸
-                    val pos = coordinates.positionInWindow()
-                    if (pos.isFinite && coordinates.size.width > 0 && coordinates.size.height > 0) {
-                        bubbleBlurBackgroundOrigin = pos
-                        bubbleBlurBackgroundSize = coordinates.size.toSize()
+                    if (origin.isFinite && coordinates.size.width > 0 && coordinates.size.height > 0) {
+                        val size = coordinates.size.toSize()
+                        if (origin != bubbleBlurBackgroundOrigin) {
+                            bubbleBlurBackgroundOrigin = origin
+                        }
+                        if (size != bubbleBlurBackgroundSize) {
+                            bubbleBlurBackgroundSize = size
+                        }
                     }
                 }
                 // 新方案：抽屉可见时仅抽屉区域原生模糊（同一子树直挂 renderEffect 合成链，不涉及 layer 录制/重放）。
@@ -653,6 +665,10 @@ private fun ChatPageContent(
                 showCompressedHistory = vm.showCompressedHistory,
                 innerPadding = innerPadding,
                 conversation = conversation,
+                reactions = reactions,
+                reactionPresets = reactionPresets,
+                onReact = vm::toggleReaction,
+                onAvatarInteraction = vm::interactWithAvatar,
                 state = chatListState,
                 loading = loadingJob != null,
                 processingStatus = processingStatus,

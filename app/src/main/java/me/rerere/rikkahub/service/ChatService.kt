@@ -6,6 +6,10 @@
 
 package me.rerere.rikkahub.service
 
+import me.rerere.rikkahub.diagnostics.LoadingDiagnostics
+import me.rerere.rikkahub.diagnostics.TaskWatchdog
+import kotlinx.coroutines.flow.onStart
+
 import me.rerere.rikkahub.data.ai.mcp.normalizeMcpArguments
 import me.rerere.rikkahub.data.repository.ConversationNodeChanges
 
@@ -62,6 +66,7 @@ import me.rerere.ai.provider.TextGenerationParams
 import me.rerere.ai.ui.ToolApprovalState
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
+import me.rerere.ai.ui.UIMessageAnnotation
 import me.rerere.rikkahub.data.model.ConversationSummary
 import me.rerere.rikkahub.data.model.CompressionUndoMode
 import me.rerere.rikkahub.data.model.summaryParagraphs
@@ -71,8 +76,7 @@ import me.rerere.rikkahub.data.ai.recoverInterruptedExecution
 import me.rerere.rikkahub.data.ai.withExecutionCheckpoint
 import me.rerere.rikkahub.utils.JsonInstant
 import me.rerere.rikkahub.data.ai.compressionTranscript
-import me.rerere.rikkahub.data.ai.compressTextChunks
-import me.rerere.rikkahub.data.ai.compressTextChunksWithProgress
+import me.rerere.rikkahub.data.ai.compressTextOnce
 import me.rerere.rikkahub.data.ai.withCompressionDeadline
 import me.rerere.rikkahub.data.ai.planCompressionSummaryMerge
 import me.rerere.rikkahub.data.ai.mergeExistingSummaryDraft
@@ -131,6 +135,14 @@ import me.rerere.rikkahub.data.model.toMessageNode
 import me.rerere.rikkahub.data.repository.ConversationRepository
 import me.rerere.rikkahub.data.repository.FolderRepository
 import me.rerere.rikkahub.data.repository.MemoryRepository
+import me.rerere.rikkahub.data.interaction.ChatInteractionRepository
+import me.rerere.rikkahub.data.interaction.MAX_CUSTOM_CHAT_REACTION_PRESETS
+import me.rerere.rikkahub.data.interaction.ReactionPresetToolResult
+import me.rerere.rikkahub.data.interaction.buildChatInteractionTools
+import me.rerere.rikkahub.data.interaction.effectiveChatReactionPresets
+import me.rerere.rikkahub.data.interaction.interactionText
+import me.rerere.rikkahub.data.interaction.normalizeCustomChatReactionPreset
+import me.rerere.rikkahub.data.interaction.normalizeCustomChatReactionPresets
 import me.rerere.rikkahub.web.BadRequestException
 import me.rerere.rikkahub.web.NotFoundException
 import me.rerere.rikkahub.utils.applyPlaceholders
@@ -181,6 +193,7 @@ class ChatService(
     private val settingsStore: SettingsStore,
     private val conversationRepo: ConversationRepository,
     private val memoryRepository: MemoryRepository,
+    private val chatInteractionRepository: ChatInteractionRepository,
     private val generationHandler: GenerationHandler,
     private val templateTransformer: TemplateTransformer,
     private val providerManager: ProviderManager,
@@ -435,6 +448,7 @@ class ChatService(
         answer: Boolean = true,
         transientSystemPrompt: String? = null,
         enableTools: Boolean = true,
+        interaction: UIMessageAnnotation.AvatarInteraction? = null,
     ): Job? {
         if (content.isEmptyInputMessage()) return null
 
@@ -448,25 +462,34 @@ class ChatService(
             me.rerere.rikkahub.data.service.ProactiveMessageService.cancel(context)
         }
 
+        val trace = LoadingDiagnostics.begin(context, "chat.send", timeoutMillis = 0)
         val job = appScope.launch {
             try {
+                trace.stage("initializing conversation")
                 initializeConversation(conversationId, updateSelectedAssistant = false)
                 val settings = settingsStore.settingsFlow.first()
 
                 // 读取最新状态 -> 追加用户消息 -> 落库，整体加锁。
                 // 防止跟同一时刻可能在跑的标题生成/建议生成/语音通话挂断反馈互相覆盖对方刚写入的消息。
+                trace.stage("waiting for conversation state lock")
                 val (assistant, processedContent) = session.withStateLock {
                     val latestConversation = session.state.value
                     val assistant = settings.getAssistantById(latestConversation.assistantId)
                         ?: settings.getCurrentAssistant()
-                    val processedContent = preprocessUserInputParts(content, assistant)
+                    val processedContent = if (interaction == null) {
+                        preprocessUserInputParts(content, assistant)
+                    } else {
+                        content
+                    }
 
                     val newConversation = latestConversation.copy(
                         messageNodes = latestConversation.messageNodes + UIMessage(
                             role = MessageRole.USER,
                             parts = processedContent,
+                            annotations = listOfNotNull(interaction),
                         ).toMessageNode(),
                     )
+                    trace.stage("saving user message")
                     saveConversationLocked(conversationId, newConversation)
                     assistant to processedContent
                 }
@@ -538,6 +561,7 @@ class ChatService(
                         conversationId = conversationId,
                         transientSystemPrompt = transientSystemPrompt,
                         enableTools = enableTools,
+                        diagnosticTrace = trace,
                     )
                 }
 
@@ -558,8 +582,162 @@ class ChatService(
                 }
             }
         }
+        job.invokeOnCompletion { trace.close() }
         session.setJob(job)
         return job
+    }
+
+    /** Avatar actions are genuine user events and follow the normal send/cancel/notification lifecycle. */
+    fun sendAvatarInteraction(conversationId: Uuid, targetMessage: UIMessage) {
+        val session = getOrCreateSession(conversationId)
+        if (session.isGenerating) return
+        val settings = settingsStore.settingsFlow.value
+        val assistant = settings.getAssistantById(session.state.value.assistantId) ?: return
+        if (!assistant.enableAvatarInteractions) return
+        if (session.state.value.currentMessages.none { it.id == targetMessage.id }) return
+        val target = targetMessage.role
+        if (target != MessageRole.USER && target != MessageRole.ASSISTANT) return
+        val targetName = if (target == MessageRole.USER) "自己" else assistant.name.ifBlank { "AI" }
+        val text = runCatching {
+            interactionText(
+                "你",
+                targetName,
+                assistant.userInteractionAction.ifBlank { "拍了拍" },
+                assistant.userInteractionSuffix,
+            )
+        }.getOrElse {
+            addError(it, conversationId, title = "头像互动")
+            return
+        }
+        sendMessage(
+            conversationId = conversationId,
+            content = listOf(UIMessagePart.Text(text)),
+            interaction = UIMessageAnnotation.AvatarInteraction(
+                actor = "user",
+                target = if (target == MessageRole.USER) "user" else "assistant",
+                targetMessageId = targetMessage.id.toString(),
+            ),
+        )
+    }
+
+    private suspend fun appendAssistantAvatarInteraction(conversationId: Uuid, assistant: Assistant): String {
+        val session = getOrCreateSession(conversationId)
+        return session.saveMutex.withLock {
+            check(conversationRepo.existsConversationById(conversationId)) { "聊天已删除" }
+            val current = session.state.value
+            check(current.assistantId == assistant.id) { "助手已改变" }
+            check(settingsStore.settingsFlow.value.getAssistantById(assistant.id)?.enableAvatarInteractions == true) {
+                "头像互动已关闭"
+            }
+            val text = interactionText(
+                assistant.name.ifBlank { "AI" },
+                "你",
+                assistant.assistantInteractionAction.ifBlank { "拍了拍" },
+                assistant.assistantInteractionSuffix,
+            )
+            val notice = UIMessage(
+                role = MessageRole.SYSTEM,
+                parts = listOf(UIMessagePart.Text(text)),
+                annotations = listOf(
+                    UIMessageAnnotation.AvatarInteraction(
+                        actor = "assistant",
+                        target = "user",
+                        targetMessageId = current.currentMessages.lastOrNull {
+                            it.role == MessageRole.USER && it.annotations.none { annotation ->
+                                annotation is UIMessageAnnotation.AvatarInteraction
+                            }
+                        }?.id?.toString(),
+                    )
+                ),
+            )
+            saveConversationLocked(conversationId, current.copy(
+                messageNodes = current.messageNodes + notice.toMessageNode(),
+            ))
+            text
+        }
+    }
+
+    private suspend fun manageReactionPresets(
+        operation: String,
+        value: String,
+    ): ReactionPresetToolResult {
+        val initial = settingsStore.settingsFlowRaw.first()
+        val currentPresets = normalizeCustomChatReactionPresets(initial.customReactionPresets)
+        return when (operation.trim().lowercase()) {
+            "list" -> ReactionPresetToolResult(
+                success = true,
+                message = "Loaded ${currentPresets.size} custom kaomoji presets.",
+                presets = currentPresets,
+            )
+
+            "add" -> {
+                val normalized = normalizeCustomChatReactionPreset(value)
+                    ?: return ReactionPresetToolResult(
+                        success = false,
+                        message = "Invalid preset, built-in duplicate, or value is too long.",
+                        presets = currentPresets,
+                    )
+                if (normalized in currentPresets) {
+                    return ReactionPresetToolResult(
+                        success = true,
+                        message = "Preset already exists.",
+                        presets = currentPresets,
+                    )
+                }
+                if (currentPresets.size >= MAX_CUSTOM_CHAT_REACTION_PRESETS) {
+                    return ReactionPresetToolResult(
+                        success = false,
+                        message = "Custom preset limit reached.",
+                        presets = currentPresets,
+                    )
+                }
+                settingsStore.update { settings ->
+                    settings.copy(
+                        customReactionPresets = normalizeCustomChatReactionPresets(
+                            settings.customReactionPresets + normalized
+                        )
+                    )
+                }
+                val latest = normalizeCustomChatReactionPresets(
+                    settingsStore.settingsFlowRaw.first().customReactionPresets
+                )
+                ReactionPresetToolResult(
+                    success = normalized in latest,
+                    message = if (normalized in latest) "Preset added." else "Unable to save preset.",
+                    presets = latest,
+                )
+            }
+
+            "remove" -> {
+                val normalized = normalizeCustomChatReactionPreset(value)
+                    ?: return ReactionPresetToolResult(
+                        success = false,
+                        message = "Built-in presets cannot be removed; value was not a custom preset.",
+                        presets = currentPresets,
+                    )
+                settingsStore.update { settings ->
+                    settings.copy(
+                        customReactionPresets = settings.customReactionPresets.filterNot {
+                            it == normalized
+                        }
+                    )
+                }
+                val latest = normalizeCustomChatReactionPresets(
+                    settingsStore.settingsFlowRaw.first().customReactionPresets
+                )
+                ReactionPresetToolResult(
+                    success = normalized !in latest,
+                    message = if (normalized !in latest) "Preset removed." else "Unable to remove preset.",
+                    presets = latest,
+                )
+            }
+
+            else -> ReactionPresetToolResult(
+                success = false,
+                message = "Unsupported operation: $operation",
+                presets = currentPresets,
+            )
+        }
     }
 
     // ---- 添加主动消息 ----
@@ -864,7 +1042,9 @@ class ChatService(
         messageRange: ClosedRange<Int>? = null,
         transientSystemPrompt: String? = null,
         enableTools: Boolean = true,
+        diagnosticTrace: TaskWatchdog.Trace? = null,
     ) {
+        diagnosticTrace?.stage("reading generation settings")
         val settings = settingsStore.settingsFlow.first()
         val initialConversation = getConversationFlow(conversationId).value
         val assistant = settings.getAssistantById(initialConversation.assistantId)
@@ -903,6 +1083,7 @@ class ChatService(
             }
 
             // check invalid messages
+            diagnosticTrace?.stage("validating message attachments")
             checkInvalidMessages(conversationId)
             val conversation = getConversationFlow(conversationId).value
             val messagesForGeneration = conversation.messagesForGeneration(messageRange)
@@ -910,6 +1091,7 @@ class ChatService(
             val requestMessageIds = messagesForGeneration.map { it.id }.toSet()
             var regenerationMessageId: Uuid? = null
             val latestUserMessage = messagesForGeneration.lastOrNull { it.role == MessageRole.USER }
+            diagnosticTrace?.stage("collecting extra information")
             val extraInfoContext = if (latestUserMessage != null && messageRange == null) {
                 extraInfoRequestCache.resolve(
                     conversationId = conversationId,
@@ -961,6 +1143,7 @@ class ChatService(
             )
 
             // start generating
+            diagnosticTrace?.stage("building generation tools and context")
             generationHandler.generateText(
                 settings = settings,
                 model = model,
@@ -994,11 +1177,13 @@ class ChatService(
                     allowAppUsage = true,
                 ) else emptyList(),
                 pluginPromptInjections = buildList {
+                    diagnosticTrace?.stage("loading plugin prompt injections")
                     addAll(pluginToolProvider.getPluginPromptInjections())
                     settings.displaySetting.buildAnniversaryPrompt()?.let(::add)
                 },
                 conversationId = conversationId.toString(),
                 onToolCheckpoint = { checkpointMessages ->
+                    diagnosticTrace?.stage("saving tool checkpoint")
                     session.withStateLock {
                         if (regenerationNodeId != null && regenerationMessageId == null) {
                             regenerationMessageId = checkpointMessages.firstOrNull { it.id !in requestMessageIds }?.id
@@ -1010,7 +1195,9 @@ class ChatService(
                         saveConversationLocked(conversationId, session.state.value)
                     }
                 },
-            ).onCompletion {
+            ).onStart {
+                diagnosticTrace?.stage("collecting generation pipeline")
+            }.onCompletion {
                 // 取消 Live Update 通知
                 cancelLiveUpdateNotification(conversationId)
 
@@ -1031,6 +1218,7 @@ class ChatService(
                     sendGenerationDoneNotification(conversationId, senderName)
                 }
             }.collect { chunk ->
+                diagnosticTrace?.stage("applying generation update")
                 when (chunk) {
                     is GenerationChunk.Messages -> {
                         if (regenerationNodeId != null && regenerationMessageId == null) {
@@ -1286,6 +1474,24 @@ class ChatService(
             )
         }
         addAll(pluginToolProvider.getTools(conversation.currentMessages, conversation.id.toString()))
+        addAll(buildChatInteractionTools(
+            assistant = assistant,
+            reactionPresets = effectiveChatReactionPresets(settings.customReactionPresets),
+            onAvatar = { appendAssistantAvatarInteraction(conversationId, assistant) },
+            onReaction = { target, emoji, add, quote ->
+                chatInteractionRepository.react(
+                    conversationId,
+                    assistant,
+                    target,
+                    "assistant",
+                    emoji,
+                    settings.customReactionPresets,
+                    add,
+                    quote,
+                )
+            },
+            onManageReactionPresets = ::manageReactionPresets,
+        ))
     }
 
     private suspend fun createWorkspaceToolsIfReady(workspaceId: String?, cwd: String? = null): List<Tool> {
@@ -1455,16 +1661,16 @@ class ChatService(
         suspend fun compressContent(content: String): String = compressor(content)
 
         val summaries = withCompressionDeadline {
-            val compressedSummary = compressTextChunksWithProgress(
-                sources.map { it.currentMessage.compressionTranscript() },
-                { onProgress("压缩聊天记录 · $it") }, ::compressContent,
+            onProgress("正在整段压缩聊天记录（含工具内容）…")
+            val compressedSummary = compressTextOnce(
+                sources.map { it.currentMessage.compressionTranscript() }, ::compressContent,
             )
             val mergePlan = base.planCompressionSummaryMerge(listOf(compressedSummary), mergeWithPrevious)
             val textsToMerge = mergePlan.textsToMerge
-            val merged = if (textsToMerge.size == 1) textsToMerge.single() else
-                compressTextChunksWithProgress(
-                    textsToMerge, { onProgress("合并往期摘要 · $it") }, ::compressContent,
-                )
+            val merged = if (textsToMerge.size == 1) textsToMerge.single() else {
+                onProgress("正在合并往期摘要…")
+                compressTextOnce(textsToMerge, ::compressContent)
+            }
             mergePlan.preservedSummaries + summaryParagraphs(merged)
         }
         onProgress("正在保存摘要…")
@@ -1492,7 +1698,7 @@ class ChatService(
             val settings = settingsStore.settingsFlow.first()
             val compressor = me.rerere.rikkahub.data.ai.CompressionEngine(providerManager)
                 .request(settings, session.state.value.assistantId, targetTokens, additionalPrompt)
-            compressTextChunks(listOf(content), compressor)
+            compressTextOnce(listOf(content), compressor)
         }
         check(session.state.value.compressionRevision == revision) { "摘要已变更，请关闭后重新打开。" }
         // Preview only. The existing Save action applies edits under the session lock.
@@ -2022,6 +2228,11 @@ class ChatService(
         )
 
         saveConversation(forkConversation.id, forkConversation)
+        chatInteractionRepository.copyForFork(
+            conversationId,
+            forkConversation.id,
+            copiedNodes.flatMap { it.messages }.mapTo(hashSetOf()) { it.id.toString() },
+        )
         return forkConversation
     }
 
@@ -2076,6 +2287,7 @@ class ChatService(
             }
 
             saveConversationLocked(conversationId, updatedConversation)
+            chatInteractionRepository.deleteForMessage(conversationId, messageId)
         }
     }
 

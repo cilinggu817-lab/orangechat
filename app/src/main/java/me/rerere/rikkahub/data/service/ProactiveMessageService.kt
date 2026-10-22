@@ -40,6 +40,9 @@ import me.rerere.ai.provider.TextGenerationParams
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
 import me.rerere.rikkahub.data.ai.GenerationToolApproval
+import me.rerere.rikkahub.data.ai.GenerationToolUpdate
+import me.rerere.rikkahub.data.ai.generateModelTurn
+import me.rerere.rikkahub.data.ai.runGenerationToolLoop
 import me.rerere.rikkahub.data.ai.buildAssistantGenerationParams
 import me.rerere.rikkahub.data.ai.executeGenerationToolBatch
 import me.rerere.rikkahub.data.ai.executionCheckpointState
@@ -58,6 +61,7 @@ import me.rerere.rikkahub.data.ai.transformers.ExtraInfoInjectionCollector
 import me.rerere.rikkahub.data.ai.transformers.forProactiveExtraInfo
 import me.rerere.rikkahub.data.ai.transformers.transforms
 import me.rerere.rikkahub.data.repository.MemoryRepository
+import me.rerere.rikkahub.data.interaction.ChatInteractionRepository
 import kotlinx.serialization.json.Json
 import me.rerere.rikkahub.CHAT_COMPLETED_NOTIFICATION_CHANNEL_ID
 import me.rerere.rikkahub.CHAT_LIVE_UPDATE_NOTIFICATION_CHANNEL_ID
@@ -321,6 +325,7 @@ class ProactiveMessageTriggerService : android.app.Service(), KoinComponent {
     private val providerManager: ProviderManager by inject()
     private val json: Json by inject()
     private val chatService: ChatService by inject()
+    private val chatInteractionRepository: ChatInteractionRepository by inject()
     private val extraInfoCollector: ExtraInfoInjectionCollector by inject()
     private val proactiveMessageService = ProactiveMessageService()
     private val activeRunCount = AtomicInteger(0)
@@ -1510,182 +1515,181 @@ class ProactiveMessageTriggerService : android.app.Service(), KoinComponent {
         protectedMessageIds: Set<Uuid>,
         activityStore: ProactiveActivityStore,
     ): Triple<List<UIMessage>, Boolean, Boolean> {
-        var messages = initialMessages.toMutableList()
+        var messages = initialMessages
         var hasToolCalls = false
         var hasJumpFlag = false // AI 原始输出是否含 [JUMP] 标记（在输出转换器处理前检测）
 
-        for (step in 0 until MAX_TOOL_STEPS) {
-            Log.d(TAG, "generateWithTools: step $step/${MAX_TOOL_STEPS}")
-            trace.event("generation_step", "step=$step")
-
-            // 流式调用 AI（替代非流式 generateText，兼容 thinking 模型）
-            // The provider-only copy may merge adjacent roles for API compatibility. Never merge
-            // the local streaming list: doing so can fold this run's assistant into the previous
-            // persisted assistant and transfer ownership back to the old message id.
-            // Recover an interrupted historical call in the provider-only copy. This run must
-            // not claim or rewrite historical nodes just to close an incomplete tool protocol.
-            val requestMessages = filesManager.validAttachments(mergeAdjacentSameRoleMessages(prepareProactiveToolContinuation(
-                messages.toList().recoverToolHistoryForRequest(json, allowLastMessageResume = false),
-            )), forSending = true).filterNot { it.parts.isEmpty() }
-            // Tool continuations still use local ASSISTANT records that the providers expand
-            // into call/result pairs. Never reuse their ids for the next assistant output.
-            var streamMessages = beginProactiveAssistantTurn(messages.toList(), model.id)
-            val turnMessageId = streamMessages.last().id
-            trace.event(
-                "assistant_turn",
-                "step=$step message=${ProactiveMessageTrace.safeId(turnMessageId)} fresh=true",
+        suspend fun persistToolCheckpoint(call: UIMessagePart.Tool) {
+            val checkpointed = messages.replaceLastGenerationTools(listOf(call))
+            updateOrAppendAiMessage(
+                conversationId,
+                proactiveToolCheckpointMessage(checkpointed.last()),
+                trace,
+                runAssistantMessageIds,
+                protectedMessageIds,
+                persist = true,
+                allowToolCompletionAfterUserReturn = call.isExecuted,
             )
-            providerImpl.streamText(
-                providerSetting = providerSetting,
-                messages = requestMessages,
-                params = params
-            ).collect { chunk ->
-                streamMessages = streamMessages.handleMessageChunk(chunk = chunk, model = model)
-
-                // 实时更新 session 状态，让打开的聊天界面能看到消息生成
-                val currentAiMessage = streamMessages.lastOrNull { it.role == MessageRole.ASSISTANT }
-                if (currentAiMessage != null) {
-                    // 用 id 匹配就地更新（保留 node id，避免思考链闪烁 / 覆盖上一条 assistant）
-                    updateOrAppendAiMessage(
-                        conversationId,
-                        currentAiMessage,
-                        trace,
-                        runAssistantMessageIds,
-                        protectedMessageIds,
+            messages = checkpointed
+            when (call.executionCheckpointState) {
+                "started" -> activityStore.append(ProactiveActivity(
+                    id = "tool-start:${call.toolCallId}",
+                    timestamp = System.currentTimeMillis(),
+                    outcome = "开始尝试后台工具；如无后续返回记录，结果尚未确认，勿盲目重试",
+                    note = call.toolName.take(80),
+                ))
+                "completed", "failed" -> {
+                    runCatching {
+                        activityStore.append(ProactiveActivity(
+                            id = "tool:${call.toolCallId}",
+                            timestamp = System.currentTimeMillis(),
+                            outcome = "后台工具调用已返回；如需确认结果，应核查业务状态，不要盲目重复执行",
+                            toolNames = listOf(call.toolName.take(80)),
+                        ))
+                    }.onFailure { Log.w(TAG, "Could not persist background tool receipt", it) }
+                    trace.event(
+                        "tool_result",
+                        "name=${call.toolName} success=${call.executionCheckpointState == "completed"} " +
+                            "outputParts=${call.output.size}",
                     )
                 }
             }
+        }
 
-            // 流式结束，更新 messages
-            messages = streamMessages.toMutableList()
-            val aiMessage = streamMessages.lastOrNull() ?: run {
-                Log.w(TAG, "No message in AI response")
-                break
-            }
-
-
-            // 在输出转换器处理前，检测 AI 原始输出是否含 [JUMP] 标记
-            val rawAiText = aiMessage.parts.filterIsInstance<UIMessagePart.Text>().joinToString("\n") { it.text }
-            if (parseProactiveDecision(rawAiText, false).shouldJump) {
-                hasJumpFlag = true
-                Log.d(TAG, "[JUMP] flag detected in raw AI output")
-            }
-            // 应用输出转换器
-            val processedMessage = listOf(aiMessage).transforms(
-                transformers = outputTransformers,
-                context = this@ProactiveMessageTriggerService,
-                model = model,
-                assistant = assistant,
-                settings = settings
-            ).first()
-            messages[messages.lastIndex] = processedMessage
-
-            // 检查是否有工具调用
-            val toolCalls = processedMessage.getTools().filter { !it.isExecuted }
-            trace.event(
-                "model_result",
-                "step=$step shape=${ProactiveMessageTrace.messageShape(processedMessage)} pendingTools=${toolCalls.size}",
-            )
-
-            if (toolCalls.isEmpty()) {
-                // 没有工具调用，生成完成
-                // 设置 Reasoning 的 finishedAt，否则UI会一直显示"思考中"
-                val now = kotlin.time.Clock.System.now()
-                val finalMessage = processedMessage.copy(
-                    parts = processedMessage.parts.map { part ->
+        messages = runGenerationToolLoop(
+            initialMessages = initialMessages,
+            maxSteps = MAX_TOOL_STEPS,
+            reserveFinalModelTurn = true,
+            toolLimitError = "Proactive tool limit reached before a final reply",
+            toolsForStep = { tools },
+            onStep = { step, finalTurn ->
+                Log.d(TAG, "generateWithTools: step $step/$MAX_TOOL_STEPS final=$finalTurn")
+                trace.event("generation_step", "step=$step final=$finalTurn")
+            },
+            generateTurn = { turnMessages, _, step ->
+                val sourceMessages = chatService.getConversationFlow(conversationId).value.currentMessages.let { source ->
+                    val requestedIds = turnMessages.mapTo(hashSetOf()) { it.id }
+                    source.take(source.indexOfLast { it.id in requestedIds } + 1)
+                }
+                val requestMessages = filesManager.validAttachments(
+                    mergeAdjacentSameRoleMessages(
+                        prepareProactiveToolContinuation(
+                            chatInteractionRepository.decorate(
+                                turnMessages,
+                                conversationId.toString(),
+                                assistant,
+                                sourceMessages = sourceMessages,
+                            ).recoverToolHistoryForRequest(json, allowLastMessageResume = false)
+                        )
+                    ),
+                    forSending = true,
+                ).filterNot { it.parts.isEmpty() }
+                var streamMessages = beginProactiveAssistantTurn(turnMessages, model.id)
+                trace.event(
+                    "assistant_turn",
+                    "step=$step message=${ProactiveMessageTrace.safeId(streamMessages.last().id)} fresh=true",
+                )
+                streamMessages = generateModelTurn(
+                    providerImpl = providerImpl,
+                    providerSetting = providerSetting,
+                    requestMessages = requestMessages,
+                    initialMessages = streamMessages,
+                    params = params,
+                    model = model,
+                    stream = true,
+                    mergeUsage = false,
+                    onUpdateMessages = { updated ->
+                        updated.lastOrNull { it.role == MessageRole.ASSISTANT }?.let { currentAiMessage ->
+                            updateOrAppendAiMessage(
+                                conversationId,
+                                currentAiMessage,
+                                trace,
+                                runAssistantMessageIds,
+                                protectedMessageIds,
+                            )
+                        }
+                    },
+                )
+                val aiMessage = streamMessages.lastOrNull() ?: run {
+                    Log.w(TAG, "No message in AI response")
+                    return@runGenerationToolLoop turnMessages
+                }
+                val rawAiText = aiMessage.parts.filterIsInstance<UIMessagePart.Text>()
+                    .joinToString("\n") { it.text }
+                if (parseProactiveDecision(rawAiText, false).shouldJump) {
+                    hasJumpFlag = true
+                    Log.d(TAG, "[JUMP] flag detected in raw AI output")
+                }
+                val processedMessage = listOf(aiMessage).transforms(
+                    transformers = outputTransformers,
+                    context = this@ProactiveMessageTriggerService,
+                    model = model,
+                    assistant = assistant,
+                    settings = settings,
+                ).first()
+                messages = turnMessages.dropLast(1) + processedMessage
+                val toolCalls = processedMessage.getTools().filter { !it.isExecuted }
+                trace.event(
+                    "model_result",
+                    "step=$step shape=${ProactiveMessageTrace.messageShape(processedMessage)} " +
+                        "pendingTools=${toolCalls.size}",
+                )
+                if (toolCalls.isEmpty()) {
+                    val now = kotlin.time.Clock.System.now()
+                    val finalMessage = processedMessage.copy(parts = processedMessage.parts.map { part ->
                         if (part is UIMessagePart.Reasoning && part.finishedAt == null) {
                             part.copy(finishedAt = now)
                         } else {
                             part
                         }
-                    }
-                )
-                messages[messages.lastIndex] = finalMessage
-                // 最终更新 session 状态（用 id 匹配就地更新）
-                updateOrAppendAiMessage(
-                    conversationId,
-                    finalMessage,
-                    trace,
-                    runAssistantMessageIds,
-                    protectedMessageIds,
-                )
-                break
-            }
-
-            // 有工具调用
-            hasToolCalls = true
-            Log.d(TAG, "Tool calls detected: ${toolCalls.size}")
-
-            suspend fun persistToolCheckpoint(call: UIMessagePart.Tool) {
-                val checkpointed = messages.toList().replaceLastGenerationTools(listOf(call))
-                updateOrAppendAiMessage(
-                    conversationId,
-                    proactiveToolCheckpointMessage(checkpointed.last()),
-                    trace,
-                    runAssistantMessageIds,
-                    protectedMessageIds,
-                    persist = true,
-                    allowToolCompletionAfterUserReturn = call.isExecuted,
-                )
-                messages = checkpointed.toMutableList()
-                when (call.executionCheckpointState) {
-                    "started" -> {
-                        activityStore.append(ProactiveActivity(
-                            id = "tool-start:${call.toolCallId}",
-                            timestamp = System.currentTimeMillis(),
-                            outcome = "开始尝试后台工具；如无后续返回记录，结果尚未确认，勿盲目重试",
-                            note = call.toolName.take(80),
-                        ))
-                    }
-                    "completed", "failed" -> {
-                        runCatching {
-                            activityStore.append(ProactiveActivity(
-                                id = "tool:${call.toolCallId}",
-                                timestamp = System.currentTimeMillis(),
-                                outcome = "后台工具调用已返回；如需确认结果，应核查业务状态，不要盲目重复执行",
-                                toolNames = listOf(call.toolName.take(80)),
-                            ))
-                        }.onFailure { Log.w(TAG, "Could not persist background tool receipt", it) }
-                        trace.event(
-                            "tool_result",
-                            "name=${call.toolName} success=${call.executionCheckpointState == "completed"} outputParts=${call.output.size}",
-                        )
-                    }
+                    })
+                    messages = messages.dropLast(1) + finalMessage
+                    updateOrAppendAiMessage(
+                        conversationId,
+                        finalMessage,
+                        trace,
+                        runAssistantMessageIds,
+                        protectedMessageIds,
+                    )
+                } else {
+                    hasToolCalls = true
+                    Log.d(TAG, "Tool calls detected: ${toolCalls.size}")
                 }
-            }
-
-            // The same durable execution boundary is used by foreground generation. The
-            // background-specific approval policy still rejects calls requiring foreground approval.
-            for (toolCall in toolCalls) {
-                val toolDef = tools.find { it.name == toolCall.toolName }
+                messages
+            },
+            executeTool = { toolCall, toolDef, step ->
                 trace.event(
                     "tool_call",
                     "step=$step name=${toolCall.toolName} id=${ProactiveMessageTrace.safeId(toolCall.toolCallId)} " +
                         "definitionFound=${toolDef != null}",
                 )
                 if (!toolCall.hasDurableToolEvidence && toolDef != null && !canExecuteProactiveTool(
-                        toolDef.needsApproval, settings.forceConfirmToolCalls, settings.autoApproveAllTools,
+                        toolDef.needsApproval,
+                        settings.forceConfirmToolCalls,
+                        settings.autoApproveAllTools,
                     )
                 ) {
                     val rejected = toolCall.copy(output = listOf(UIMessagePart.Text(
                         "This tool requires foreground approval. It was not executed in the background.",
                     ))).withExecutionCheckpoint("denied")
                     withContext(NonCancellable) { persistToolCheckpoint(rejected) }
-                    currentCoroutineContext().ensureActive()
-                    continue
+                    rejected
+                } else {
+                    executeGenerationToolBatch(
+                        approval = GenerationToolApproval(listOf(toolCall)),
+                        definitions = listOfNotNull(toolDef),
+                        json = json,
+                        onCheckpoint = ::persistToolCheckpoint,
+                    ).singleOrNull() ?: toolCall
                 }
-
-                // 主动器复用助手已经启用的工具权限，不再额外把普通工具一律拒绝。
-                // AppUsage 在组装工具列表时已经由“允许主动查岗”单独把关；未授权时
-                // get_app_usage 根本不会出现在 tools 中，因此不可能走到这里执行。
-                executeGenerationToolBatch(
-                    approval = GenerationToolApproval(listOf(toolCall), waitingForApproval = false),
-                    definitions = tools,
-                    json = json,
-                    onCheckpoint = ::persistToolCheckpoint,
-                )
-            }
-        }
+            },
+            onToolsUpdated = { updated, update ->
+                messages = updated
+                if (update == GenerationToolUpdate.APPROVAL) {
+                    trace.event("tool_approval", "background approval unexpectedly paused")
+                }
+            },
+        )
 
         return Triple(messages, hasToolCalls, hasJumpFlag)
     }

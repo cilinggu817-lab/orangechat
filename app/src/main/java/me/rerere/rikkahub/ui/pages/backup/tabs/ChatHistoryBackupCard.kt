@@ -8,9 +8,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
@@ -135,28 +133,32 @@ internal fun ChatHistoryBackupCard() {
 /** Action group, not a selection control: no selected/checkmark state for restore modes. */
 @Composable
 internal fun ChatHistoryActions(enabled: Boolean, onExport: () -> Unit, onIncremental: () -> Unit, onOverwrite: () -> Unit) {
+    // Match the visible container height of the backup-item SegmentedButtons.
+    val actionHeight = 40.dp
     val shape = RoundedCornerShape(28.dp)
     val colors = MaterialTheme.colorScheme
     val foreground = colors.onSecondaryContainer.copy(alpha = if (enabled) 1f else 0.38f)
     val border = BorderStroke(1.dp, colors.outline.copy(alpha = if (enabled) 1f else 0.38f))
     Column(Modifier.fillMaxWidth().padding(top = 8.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Surface(onClick = onExport, enabled = enabled, shape = shape, border = border,
-            color = colors.secondaryContainer, contentColor = foreground, modifier = Modifier.fillMaxWidth()) {
-            Box(Modifier.heightIn(min = 48.dp).padding(horizontal = 16.dp, vertical = 12.dp), contentAlignment = Alignment.Center) {
+            color = colors.secondaryContainer, contentColor = foreground,
+            modifier = Modifier.fillMaxWidth().height(actionHeight)) {
+            Box(Modifier.fillMaxHeight().padding(horizontal = 16.dp), contentAlignment = Alignment.Center) {
                 Text("仅导出聊天记录", style = MaterialTheme.typography.labelLarge, textAlign = TextAlign.Center)
             }
         }
-        Surface(shape = shape, border = border, color = colors.secondaryContainer, contentColor = foreground) {
-            Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min)) {
-                Box(Modifier.weight(1f).heightIn(min = 48.dp).fillMaxHeight()
+        Surface(shape = shape, border = border, color = colors.secondaryContainer, contentColor = foreground,
+            modifier = Modifier.fillMaxWidth().height(actionHeight)) {
+            Row(Modifier.fillMaxWidth().fillMaxHeight()) {
+                Box(Modifier.weight(1f).fillMaxHeight()
                     .clickable(enabled = enabled, role = Role.Button, onClick = onIncremental)
-                    .padding(horizontal = 8.dp, vertical = 12.dp), contentAlignment = Alignment.Center) {
+                    .padding(horizontal = 8.dp), contentAlignment = Alignment.Center) {
                     Text("增量恢复", style = MaterialTheme.typography.labelLarge, textAlign = TextAlign.Center)
                 }
                 VerticalDivider(Modifier.fillMaxHeight(), color = colors.outline)
-                Box(Modifier.weight(1f).heightIn(min = 48.dp).fillMaxHeight()
+                Box(Modifier.weight(1f).fillMaxHeight()
                     .clickable(enabled = enabled, role = Role.Button, onClick = onOverwrite)
-                    .padding(horizontal = 8.dp, vertical = 12.dp), contentAlignment = Alignment.Center) {
+                    .padding(horizontal = 8.dp), contentAlignment = Alignment.Center) {
                     Text("覆盖恢复", style = MaterialTheme.typography.labelLarge, textAlign = TextAlign.Center)
                 }
             }

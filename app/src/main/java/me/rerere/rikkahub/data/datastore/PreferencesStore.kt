@@ -54,6 +54,7 @@ import me.rerere.rikkahub.data.ai.prompts.DEFAULT_SUGGESTION_PROMPT
 import me.rerere.rikkahub.data.ai.prompts.DEFAULT_TITLE_PROMPT
 import me.rerere.rikkahub.data.ai.prompts.DEFAULT_TRANSLATION_PROMPT
 import me.rerere.rikkahub.data.ai.prompts.LEARNING_MODE_PROMPT
+import me.rerere.rikkahub.data.interaction.normalizeCustomChatReactionPresets
 import me.rerere.rikkahub.data.model.Assistant
 import me.rerere.rikkahub.data.model.Avatar
 import me.rerere.rikkahub.data.model.ExternalMemory
@@ -104,6 +105,7 @@ class SettingsStore(
         val CUSTOM_THEMES = stringPreferencesKey("custom_themes")
         val DISPLAY_SETTING = stringPreferencesKey("display_setting")
         val DEVELOPER_MODE = booleanPreferencesKey("developer_mode")
+        val CUSTOM_REACTION_PRESETS = stringPreferencesKey("custom_reaction_presets")
 
         // 免责声明与用户协议
         val DISCLAIMER_ACCEPTED = booleanPreferencesKey("disclaimer_accepted")
@@ -308,6 +310,9 @@ class SettingsStore(
                 themeId = preferences[THEME_ID] ?: PresetThemes[0].id,
                 customThemes = runCatching { preferences[CUSTOM_THEMES]?.let { JsonInstant.decodeFromString<List<CustomTheme>>(it) } }.getOrNull() ?: emptyList(),
                 developerMode = preferences[DEVELOPER_MODE] == true,
+                customReactionPresets = runCatching {
+                    preferences[CUSTOM_REACTION_PRESETS]?.let { JsonInstant.decodeFromString<List<String>>(it) }
+                }.getOrNull()?.let(::normalizeCustomChatReactionPresets).orEmpty(),
                 displaySetting = runCatching { JsonInstant.decodeFromString<DisplaySetting>(preferences[DISPLAY_SETTING] ?: "{}") }.getOrElse { DisplaySetting() },
                 searchServices = preferences.readPlaintextOrMigrate<List<SearchServiceOptions>>(
                     SEARCH_SERVICES,
@@ -561,6 +566,8 @@ class SettingsStore(
             preferences[THEME_ID] = settings.themeId
             preferences[CUSTOM_THEMES] = JsonInstant.encodeToString(settings.customThemes)
             preferences[DEVELOPER_MODE] = settings.developerMode
+            preferences[CUSTOM_REACTION_PRESETS] =
+                JsonInstant.encodeToString(normalizeCustomChatReactionPresets(settings.customReactionPresets))
             preferences[DISPLAY_SETTING] = JsonInstant.encodeToString(settings.displaySetting)
 
             preferences[DISCLAIMER_ACCEPTED] = settings.disclaimerAccepted
@@ -832,6 +839,7 @@ data class Settings(
     val themeId: String = PresetThemes[0].id,
     val customThemes: List<CustomTheme> = emptyList(),
     val developerMode: Boolean = false,
+    val customReactionPresets: List<String> = emptyList(),
     val displaySetting: DisplaySetting = DisplaySetting(),
     val enableWebSearch: Boolean = false,
     val favoriteModels: List<Uuid> = emptyList(),

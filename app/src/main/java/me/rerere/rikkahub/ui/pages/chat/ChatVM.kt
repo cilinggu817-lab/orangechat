@@ -46,6 +46,8 @@ import me.rerere.rikkahub.data.model.MessageNode
 import me.rerere.rikkahub.data.model.NodeFavoriteTarget
 import me.rerere.rikkahub.data.repository.ConversationRepository
 import me.rerere.rikkahub.data.repository.FavoriteRepository
+import me.rerere.rikkahub.data.interaction.ChatInteractionRepository
+import me.rerere.rikkahub.data.datastore.getAssistantById
 import me.rerere.rikkahub.service.ChatError
 import me.rerere.rikkahub.service.ChatService
 import me.rerere.rikkahub.ui.hooks.writeStringPreference
@@ -66,9 +68,38 @@ class ChatVM(
     val updateChecker: UpdateChecker,
     private val filesManager: FilesManager,
     private val favoriteRepository: FavoriteRepository,
+    private val chatInteractionRepository: ChatInteractionRepository,
 ) : ViewModel() {
     private val _conversationId: Uuid = Uuid.parse(id)
     val conversation: StateFlow<Conversation> = chatService.getConversationFlow(_conversationId)
+    val reactions = chatInteractionRepository.observe(id)
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    fun interactWithAvatar(target: UIMessage) =
+        chatService.sendAvatarInteraction(_conversationId, target)
+
+    fun toggleReaction(message: UIMessage, emoji: String, quote: String) {
+        viewModelScope.launch {
+            try {
+                val assistant = settings.value.getAssistantById(conversation.value.assistantId) ?: return@launch
+                if (!assistant.enableMessageReactions) return@launch
+                val customReactionPresets = settings.value.customReactionPresets
+                chatInteractionRepository.react(
+                    conversationId = _conversationId,
+                    assistant = assistant,
+                    target = message.id.toString(),
+                    actor = "user",
+                    emoji = emoji,
+                    customReactionPresets = customReactionPresets,
+                    quote = quote,
+                )
+            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                chatService.addError(error, _conversationId, title = "消息表情")
+            }
+        }
+    }
     var chatListInitialized by mutableStateOf(false) // 聊天列表是否已经滚动到底部
     var showCompressedHistory by mutableStateOf(false)
     var summaryDialogConversation by mutableStateOf<Conversation?>(null)

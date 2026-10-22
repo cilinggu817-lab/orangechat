@@ -24,7 +24,7 @@ internal fun List<UIMessage>.unfinishedGenerationTools(): List<UIMessagePart.Too
 
 internal data class GenerationToolApproval(
     val calls: List<UIMessagePart.Tool>,
-    val waitingForApproval: Boolean,
+    val waitingForApproval: Boolean = false,
 )
 
 /** Apply the same approval policy to new calls and a whole batch resumed after user interaction. */

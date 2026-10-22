@@ -28,6 +28,7 @@ import me.rerere.common.android.Logging
 import me.rerere.rikkahub.AppScope
 import me.rerere.rikkahub.data.db.entity.ManagedFileEntity
 import me.rerere.rikkahub.data.repository.FilesRepository
+import me.rerere.rikkahub.diagnostics.LoadingDiagnostics
 import me.rerere.rikkahub.utils.exportImage
 import me.rerere.rikkahub.utils.exportImageFile
 import me.rerere.rikkahub.utils.getActivity
@@ -240,15 +241,19 @@ class FilesManager(
         }
     }
 
-    suspend fun countChatFiles(): Pair<Int, Long> = withContext(Dispatchers.IO) {
-        val dir = context.filesDir.resolve(FileFolders.UPLOAD)
-        if (!dir.exists()) {
-            return@withContext Pair(0, 0)
+    suspend fun countChatFiles(): Pair<Int, Long> {
+        val trace = LoadingDiagnostics.begin(context, "storage.count")
+        return try {
+            withContext(Dispatchers.IO) {
+                trace.stage("scanning private upload directory")
+                val files = context.filesDir.resolve(FileFolders.UPLOAD).listFiles().orEmpty()
+                val result = files.size to files.sumOf { it.length() }
+                trace.stage("returning disk count to caller")
+                result
+            }
+        } finally {
+            trace.close()
         }
-        val files = dir.listFiles() ?: return@withContext Pair(0, 0)
-        val count = files.size
-        val size = files.sumOf { it.length() }
-        Pair(count, size)
     }
 
     fun createChatTextFile(text: String): UIMessagePart.Document {

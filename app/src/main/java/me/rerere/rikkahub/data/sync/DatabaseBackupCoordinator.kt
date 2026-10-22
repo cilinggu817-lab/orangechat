@@ -74,6 +74,7 @@ class DatabaseBackupCoordinator(
         val stagedDb = File(pendingDir, DB_FILE)
         if (!stagedDb.isFile || stagedDb.length() == 0L) return
         validateDatabase(stagedDb)
+        preflightBackupDatabase(context, stagedDb)
         File(pendingDir, READY_MARKER).writeText("ready")
     }
 
@@ -97,6 +98,7 @@ class DatabaseBackupCoordinator(
     internal fun validateStagedRestore(file: File) {
         check(file.isFile && file.length() > 0) { "Backup database is missing or empty" }
         validateDatabase(file)
+        preflightBackupDatabase(context, file)
     }
 
     companion object {

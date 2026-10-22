@@ -26,6 +26,8 @@ import me.rerere.rikkahub.data.datastore.withAssistantTags
 import me.rerere.rikkahub.data.files.FilesManager
 import me.rerere.rikkahub.data.files.SkillManager
 import me.rerere.rikkahub.data.files.SkillMetadata
+import me.rerere.rikkahub.data.interaction.normalizeCustomChatReactionPreset
+import me.rerere.rikkahub.data.interaction.normalizeCustomChatReactionPresets
 import me.rerere.rikkahub.data.model.Assistant
 import me.rerere.rikkahub.data.model.AssistantMemory
 import me.rerere.rikkahub.data.model.Avatar
@@ -147,6 +149,29 @@ class AssistantDetailVM(
             replaced?.let { (old, new) ->
                 checkAvatarDelete(old, new)
                 checkBackgroundDelete(old, new)
+            }
+        }
+    }
+
+    fun addCustomReactionPreset(value: String) {
+        val normalized = normalizeCustomChatReactionPreset(value) ?: return
+        viewModelScope.launch {
+            settingsStore.update { current ->
+                current.copy(
+                    customReactionPresets = normalizeCustomChatReactionPresets(
+                        current.customReactionPresets + normalized
+                    )
+                )
+            }
+        }
+    }
+
+    fun removeCustomReactionPreset(value: String) {
+        viewModelScope.launch {
+            settingsStore.update { current ->
+                current.copy(
+                    customReactionPresets = current.customReactionPresets.filterNot { it == value }
+                )
             }
         }
     }

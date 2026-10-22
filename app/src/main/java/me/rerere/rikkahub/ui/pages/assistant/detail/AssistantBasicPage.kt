@@ -70,6 +70,7 @@ fun AssistantBasicPage(id: String) {
         }
     )
     val assistant by vm.assistant.collectAsStateWithLifecycle()
+    val settings by vm.settings.collectAsStateWithLifecycle()
     val providers by vm.providers.collectAsStateWithLifecycle()
     val tags by vm.tags.collectAsStateWithLifecycle()
     val workspaces by vm.workspaces.collectAsStateWithLifecycle()
@@ -97,6 +98,9 @@ fun AssistantBasicPage(id: String) {
             providers = providers,
             tags = tags,
             workspaces = workspaces,
+            customReactionPresets = settings.customReactionPresets,
+            onAddReactionPreset = vm::addCustomReactionPreset,
+            onRemoveReactionPreset = vm::removeCustomReactionPreset,
             onUpdate = { vm.update(assistant, it) },
             vm = vm
         )
@@ -110,6 +114,9 @@ internal fun AssistantBasicContent(
     providers: List<me.rerere.ai.provider.ProviderSetting>,
     tags: List<DataTag>,
     workspaces: List<WorkspaceEntity>,
+    customReactionPresets: List<String>,
+    onAddReactionPreset: (String) -> Unit,
+    onRemoveReactionPreset: (String) -> Unit,
     onUpdate: (Assistant) -> Unit,
     vm: AssistantDetailVM
 ) {
@@ -538,7 +545,16 @@ internal fun AssistantBasicContent(
                 )
             }
         }
- 
+
+        ChatInteractionSettings(
+            assistant = assistant,
+            customReactionPresets = customReactionPresets,
+            onAddReactionPreset = onAddReactionPreset,
+            onRemoveReactionPreset = onRemoveReactionPreset,
+        ) { transform ->
+            onUpdate(transform(assistant))
+        }
+
         Card(
             colors = CustomColors.cardColorsOnSurfaceContainer
         ) {

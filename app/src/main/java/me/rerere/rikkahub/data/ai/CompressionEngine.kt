@@ -22,7 +22,7 @@ internal suspend fun <T : Any> withCompressionDeadline(
     timeoutMillis: Long = COMPRESSION_OPERATION_TIMEOUT_MS,
     block: suspend () -> T,
 ): T = withTimeoutOrNull(timeoutMillis) { block() }
-    ?: error("压缩等待超时，请减少本次压缩的消息数量或更换模型后重试；原文和已有摘要未修改")
+    ?: error("压缩等待超时，请增加保留的近期消息数量或更换模型后重试；原文和已有摘要未修改")
 
 /** Streaming cancellation closes the provider connection, including keep-alive-only responses. */
 internal suspend fun collectCompressionSummary(

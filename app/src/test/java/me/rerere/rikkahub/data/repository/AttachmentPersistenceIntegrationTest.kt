@@ -4,10 +4,15 @@ import android.app.Application
 import android.database.sqlite.SQLiteBlobTooBigException
 import androidx.core.net.toUri
 import androidx.room.Room
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
@@ -42,6 +47,73 @@ import kotlin.uuid.Uuid
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [28], manifest = Config.NONE, application = Application::class, shadows = [HostFileUriShadow::class])
 class AttachmentPersistenceIntegrationTest {
+    @Test fun `slow attachment validation leaves the chat database writer available`() = runBlocking {
+        fixture { db, repository, files, _ ->
+            val original = conversation(UIMessage.user("keep text").copy(parts = listOf(
+                UIMessagePart.Text("keep text"), UIMessagePart.Image("file:///missing-${Uuid.random()}.png"),
+            )))
+            repository.insertConversation(original)
+            val scanStarted = CompletableDeferred<Unit>()
+            val finishScan = CompletableDeferred<Unit>()
+            coroutineScope {
+                val cleanup = async(Dispatchers.IO) {
+                    repository.repairInvalidAttachments { messages ->
+                        scanStarted.complete(Unit)
+                        finishScan.await()
+                        files.validAttachments(messages)
+                    }
+                }
+                try {
+                    withTimeout(5_000) { scanStarted.await() }
+                    val otherChat = conversation(UIMessage.user("new chat remains writable"))
+                    withTimeout(5_000) { repository.insertConversation(otherChat) }
+                    assertEquals("new chat remains writable", stored(db, otherChat).single().toText())
+                    assertFalse("The attachment scan is still paused", cleanup.isCompleted)
+                } finally {
+                    finishScan.complete(Unit)
+                }
+                assertEquals(1, withTimeout(5_000) { cleanup.await() })
+            }
+            assertEquals("keep text", stored(db, original).single().toText())
+            assertTrue(attachmentUrls(stored(db, original)).isEmpty())
+        }
+    }
+
+    @Test fun `attachment validation never overwrites a checkpoint saved during its scan`() = runBlocking {
+        fixture(forceSlices = true) { db, repository, files, _ ->
+            val missing = UIMessagePart.Image("file:///missing-${Uuid.random()}.png")
+            val oldMessage = UIMessage.assistant("old").copy(parts = listOf(UIMessagePart.Text("old"), missing))
+            val original = conversation(oldMessage)
+            repository.insertConversation(original)
+            val scanStarted = CompletableDeferred<Unit>()
+            val finishScan = CompletableDeferred<Unit>()
+            val freshMessage = oldMessage.copy(parts = listOf(UIMessagePart.Text("new streamed checkpoint"), missing))
+            coroutineScope {
+                val cleanup = async(Dispatchers.IO) {
+                    repository.repairInvalidAttachments { messages ->
+                        scanStarted.complete(Unit)
+                        finishScan.await()
+                        files.validAttachments(messages)
+                    }
+                }
+                try {
+                    withTimeout(5_000) { scanStarted.await() }
+                    val node = db.messageNodeDao().getNodesByIds(listOf(original.messageNodes.single().id.toString())).single()
+                    withTimeout(5_000) {
+                        db.messageNodeDao().update(node.copy(messages = JsonInstant.encodeToString(listOf(freshMessage))))
+                    }
+                } finally {
+                    finishScan.complete(Unit)
+                }
+                assertEquals("The stale scan must lose its compare-and-set", 0, withTimeout(5_000) { cleanup.await() })
+            }
+            assertEquals(listOf(freshMessage), stored(db, original))
+            assertEquals(1, repository.repairInvalidAttachments())
+            assertEquals("new streamed checkpoint", stored(db, original).single().toText())
+            assertTrue(attachmentUrls(stored(db, original)).isEmpty())
+        }
+    }
+
     @Test fun `manual deletion repairs only selected references without scanning unrelated corrupt images`() = runBlocking {
         fixture(forceSlices = true) { db, repository, files, _ ->
             val selected = files.saveManagedFromBytes(FileFolders.UPLOAD, "data".toByteArray(), "delete.txt", "text/plain")
