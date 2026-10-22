@@ -9,7 +9,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class RecentMediaLimitTest {
-    private fun voice(i: Int, transcript: String = "转写$i") =
+    private fun voice(i: Int, transcript: String = "转写${i}") =
         UIMessagePart.VoiceMessage(url = "/data/voice/$i.m4a", duration = 1000, transcript = transcript)
 
     private fun image(i: Int) = UIMessagePart.Image("file:///upload/$i.png")
@@ -64,7 +64,7 @@ class RecentMediaLimitTest {
 
     @Test
     fun `old voices become transcripts and newest stay audio`() {
-        val messages = (1..8).map { user(UIMessagePart.Text("第$it句"), voice(it)) }
+        val messages = (1..8).map { user(UIMessagePart.Text("第${it}句"), voice(it)) }
         // 上限 5、每批 3：超出 3 条，砍最旧的 3 条
         val result = limitRecentAudio(messages, 5)
 
