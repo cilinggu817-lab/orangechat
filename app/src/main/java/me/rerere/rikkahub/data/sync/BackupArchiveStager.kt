@@ -84,3 +84,27 @@ internal suspend fun stageBackupArchive(
     } else emptyList()
     return StagedBackup(settings, pluginSettings, files, databases)
 }
+
+/**
+ * Live files inside every plugin directory the backup restores, but that the backup does not
+ * contain. Listing them as restore targets without a staged replacement makes the journal move
+ * them aside (and back on rollback), so each restored plugin directory ends up exactly as it was
+ * backed up. Otherwise files added by a newer plugin version survive next to the older backup's
+ * files and `.integrity`, and the plugin fails its checksum ("插件文件已被篡改或损坏").
+ */
+internal fun stalePluginFiles(root: File, stagedFiles: List<String>): List<String> {
+    val prefix = "files/plugins/"
+    val staged = stagedFiles.toHashSet()
+    val pluginIds = stagedFiles.filter { it.startsWith(prefix) }
+        .map { it.removePrefix(prefix).substringBefore('/') }
+        .filter { it.isNotBlank() && !it.startsWith(".") }
+        .toSet()
+    return pluginIds.flatMap { id ->
+        val directory = File(root, prefix + id)
+        if (!directory.isDirectory) return@flatMap emptyList()
+        directory.walkTopDown().filter { it.isFile }
+            .map { prefix + id + "/" + it.relativeTo(directory).invariantSeparatorsPath }
+            .filter { it !in staged }
+            .toList()
+    }.sorted()
+}

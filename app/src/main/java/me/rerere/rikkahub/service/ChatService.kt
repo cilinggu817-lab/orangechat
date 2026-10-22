@@ -1479,13 +1479,15 @@ class ChatService(
             reactionPresets = effectiveChatReactionPresets(settings.customReactionPresets),
             onAvatar = { appendAssistantAvatarInteraction(conversationId, assistant) },
             onReaction = { target, emoji, add, quote ->
+                // Read presets at execution time: reaction_preset may have added one earlier in
+                // this same turn, after the tool list (and its settings snapshot) was built.
                 chatInteractionRepository.react(
                     conversationId,
                     assistant,
                     target,
                     "assistant",
                     emoji,
-                    settings.customReactionPresets,
+                    settingsStore.settingsFlowRaw.first().customReactionPresets,
                     add,
                     quote,
                 )
@@ -2015,6 +2017,29 @@ class ChatService(
             filesManager.cleanInvalidFiles() to conversationRepo.repairInvalidAttachments()
         } finally {
             withContext(NonCancellable) { refreshAttachmentReferences() }
+        }
+    }
+
+    /**
+     * Managed upload entries whose bytes nothing references any more (for example the copies a
+     * chat-history overwrite restore left behind). Read-only; deletion goes through the normal
+     * confirmation and [deleteManagedAttachments]. Files held by any open session's in-memory
+     * state are always kept, so an unsaved turn's attachment is never reported as unused.
+     */
+    suspend fun findUnreferencedAttachments(): Set<Long> = attachmentMaintenanceMutex.withLock {
+        withContext(Dispatchers.IO) {
+            filesManager.syncFolder()
+            val entities = filesManager.list()
+            val byName = entities.associateBy { filesManager.getFile(it).name }
+            val sessionNames = buildSet {
+                sessions.values.toList().forEach { session ->
+                    if (!session.isDeleted) session.state.value.files.forEach { uri ->
+                        me.rerere.rikkahub.data.files.localAttachmentFile(uri.toString())?.let { add(it.name) }
+                    }
+                }
+            }
+            conversationRepo.findUnreferencedChatFileNames(byName.keys - sessionNames)
+                .mapNotNullTo(mutableSetOf()) { byName[it]?.id }
         }
     }
 

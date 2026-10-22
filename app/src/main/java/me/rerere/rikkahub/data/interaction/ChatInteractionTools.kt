@@ -59,7 +59,8 @@ fun buildChatInteractionTools(
                     })
                     put("emoji", buildJsonObject {
                         put("type", "string")
-                        put("description", "A kaomoji from the supported reaction list")
+                        put("description", "A kaomoji from the supported reaction list, or a custom preset " +
+                            "added with reaction_preset (usable immediately, even in the same turn)")
                         put("enum", buildJsonArray { reactionPresets.forEach { add(it) } })
                     })
                     put("operation", buildJsonObject {

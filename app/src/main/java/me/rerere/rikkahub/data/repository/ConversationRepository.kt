@@ -33,6 +33,7 @@ import me.rerere.rikkahub.data.db.entity.MessageNodeEntity
 import me.rerere.rikkahub.data.files.FilesManager
 import me.rerere.rikkahub.data.files.attachmentUrls
 import me.rerere.rikkahub.data.files.localAttachmentFile
+import me.rerere.rikkahub.data.files.removeReferencedFileNames
 import me.rerere.rikkahub.data.datastore.SettingsStore
 import me.rerere.rikkahub.data.model.Conversation
 import me.rerere.rikkahub.data.model.MessageNode
@@ -598,6 +599,45 @@ class ConversationRepository(
     }
 
     suspend fun repairInvalidAttachments(): Int = repairInvalidAttachments { filesManager.validAttachments(it) }
+
+    /**
+     * Upload file names that no chat branch, favorite snapshot, conversation field or setting
+     * mentions. Read-only: the caller shows the result for confirmation before deleting anything.
+     *
+     * One token pass over every row, linear in history size. Returns empty when settings are
+     * unavailable, so a missing reference source can never make files look unused.
+     */
+    suspend fun findUnreferencedChatFileNames(candidates: Collection<String>): Set<String> =
+        withContext(Dispatchers.IO) {
+            val store = settingsStore ?: return@withContext emptySet()
+            val settings = store.settingsFlow.value
+            if (settings.init) return@withContext emptySet()
+            val remaining = candidates.filterTo(hashSetOf()) { it.isNotBlank() && !it.startsWith(".") }
+            removeReferencedFileNames(JsonInstant.encodeToString(settings), remaining)
+            undoAttachmentNames.values.forEach { remaining.removeAll(it) }
+            for (conversationId in conversationDAO.getAllIds()) {
+                if (remaining.isEmpty()) break
+                val entity = conversationDAO.getConversationById(conversationId) ?: continue
+                removeReferencedFileNames(entity.nodes, remaining)
+                removeReferencedFileNames(entity.compressionSummaries, remaining)
+                removeReferencedFileNames(entity.customSystemPrompt, remaining)
+                for (id in messageNodeDAO.getNodeIdsOfConversation(conversationId)) {
+                    if (remaining.isEmpty()) break
+                    val node = database.withTransaction { messageNodeDAO.loadCompleteNode(id) } ?: continue
+                    removeReferencedFileNames(node.messages, remaining)
+                }
+            }
+            favoriteDAO.listAll().first().forEach { favorite ->
+                removeReferencedFileNames(favorite.snapshotJson, remaining)
+                removeReferencedFileNames(favorite.refJson, remaining)
+                favorite.metaJson?.let { removeReferencedFileNames(it, remaining) }
+            }
+            // Settings may have changed during the scan; a plain substring check is cheap here.
+            // (A per-file messageNodeDAO.referencesFile re-check would be a full table scan per
+            // candidate; the token pass above already read every row.)
+            val settingsJson = JsonInstant.encodeToString(store.settingsFlow.value)
+            remaining.filterTo(hashSetOf()) { name -> !settingsJson.contains(name) }
+        }
 
     /** Read a consistent node, scan outside the writer transaction, then compare-and-set its JSON. */
     internal suspend fun repairInvalidAttachments(

@@ -243,6 +243,8 @@ class ChatHistoryRestoreIntegrationTest {
             repository.insertConversation(original)
             val output = ByteArrayOutputStream()
             backup.export(output)
+            val uploads = files.getFile(file).parentFile!!
+            val beforeFiles = uploads.listFiles().orEmpty().mapTo(hashSetOf()) { it.name }
             val changed = original.copy(title = "current title")
             repository.updateConversation(changed)
             assertEquals(1, backup.stage(output.toByteArray().inputStream(), ChatHistoryRestoreMode.OVERWRITE_MATCHING))
@@ -253,8 +255,10 @@ class ChatHistoryRestoreIntegrationTest {
             val result = repository.getConversationById(original.id)!!
             assertEquals("original", result.title)
             val voice = result.messageNodes.single().currentMessage.parts.first() as UIMessagePart.VoiceMessage
-            assertNotEquals(url, voice.url)
+            // Same device: the byte-identical upload is reused instead of written a second time.
+            assertEquals(url, voice.url)
             assertArrayEquals(byteArrayOf(0, 1, 2, -1), File(java.net.URI(voice.url)).readBytes())
+            assertEquals(beforeFiles, uploads.listFiles().orEmpty().mapTo(hashSetOf()) { it.name })
             backup.applyPendingBeforeServices()
             assertEquals(result, repository.getConversationById(original.id))
         }

@@ -260,14 +260,25 @@ class ChatHistoryBackup(
                     ?: settings.assistantId.takeIf { it in assistants } ?: settings.assistants.first().id
                 val selectedAttachments = archive.attachments.filterKeys { it in neededAttachments }
                 var copied = 0
+                val uploadDir = File(context.filesDir, "upload")
+                check(uploadDir.mkdirs() || uploadDir.isDirectory)
+                val dedup = ChatAttachmentDedup(uploadDir)
                 val urls = selectedAttachments.mapValues { (_, name) ->
                     coroutineContext.ensureActive()
                     onProgress(ChatRestoreProgress("正在恢复附件 $copied/${selectedAttachments.size}…",
                         ChatRestoreStep.WRITING, copied, selectedAttachments.size))
                     val source = File(directory, name)
                     check(source.isFile) { "待恢复的附件缺失" }
-                    val target = File(context.filesDir, "upload/chat-${plan.id}-${source.name}")
-                    check(target.parentFile!!.mkdirs() || target.parentFile!!.isDirectory)
+                    val target = File(uploadDir, "chat-${plan.id}-${source.name}")
+                    // Replay after process death keeps using the copy it already made. Otherwise
+                    // reuse a byte-identical file already on this device instead of duplicating it.
+                    val existing = if (target.exists()) null else dedup.findExisting(source)
+                    if (existing != null) {
+                        copied++
+                        onProgress(ChatRestoreProgress("已恢复附件 $copied/${selectedAttachments.size}",
+                            ChatRestoreStep.WRITING, copied, selectedAttachments.size))
+                        return@mapValues existing.toUri().toString()
+                    }
                     if (!target.exists()) {
                         val temp = File(target.parentFile, ".${target.name}.tmp")
                         try {
@@ -284,6 +295,7 @@ class ChatHistoryBackup(
                                 out.fd.sync()
                             }
                             check(temp.renameTo(target)) { "无法保存聊天附件" }
+                            dedup.register(target)
                         } finally { temp.delete() }
                     }
                     copied++

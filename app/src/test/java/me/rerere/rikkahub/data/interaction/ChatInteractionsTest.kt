@@ -142,4 +142,13 @@ class ChatInteractionsTest {
         assertFalse(request.avatarInteractionText().contains("current time"))
         assertEquals("你拍了拍AI", notice.avatarInteractionText())
     }
+
+    @Test
+    fun `custom preset saved with stray whitespace still validates`() {
+        // Repository validates against the normalized live list, so a preset just added via
+        // reaction_preset (same turn) is accepted for the assistant's own reaction.
+        val stored = listOf("  ꒰ *•ɷ•* ꒱ ")
+        assertFalse(isSupportedChatReaction("꒰ *•ɷ•* ꒱", stored))
+        assertTrue(isSupportedChatReaction("꒰ *•ɷ•* ꒱", normalizeCustomChatReactionPresets(stored)))
+    }
 }

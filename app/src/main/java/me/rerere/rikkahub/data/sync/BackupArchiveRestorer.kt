@@ -32,7 +32,7 @@ internal class BackupArchiveRestorer(
                         .relativeTo(context.dataDir).invariantSeparatorsPath
                     val staged = stageBackupArchive(
                         archive, transaction, restoreFiles, restoreDatabase, includePlugins, databaseDirectory,
-                    )
+                    ).let { it.copy(files = it.files + stalePluginFiles(context.dataDir, it.files)) }
                     val settings = staged.settings?.let {
                         json.decodeFromString<Settings>(SettingsJsonMigrator.migrate(it)).let { restored ->
                             check(!restored.init) { "Cannot restore dummy settings" }

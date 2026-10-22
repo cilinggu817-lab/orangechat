@@ -50,7 +50,9 @@ class ChatInteractionRepository(
         val key = reactionKey(conversationId.toString(), message.id.toString(), actor, emoji, resolvedQuote)
         val shouldAdd = add ?: !dao.exists(key)
         if (shouldAdd) {
-            require(isSupportedChatReaction(emoji, customReactionPresets)) { "请选择支持的颜文字" }
+            require(isSupportedChatReaction(emoji, normalizeCustomChatReactionPresets(customReactionPresets))) {
+                "请选择支持的颜文字"
+            }
             dao.insert(
                 MessageReaction(
                     key,

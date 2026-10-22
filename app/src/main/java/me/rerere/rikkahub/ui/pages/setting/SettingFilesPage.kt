@@ -99,6 +99,8 @@ fun SettingFilesPage(
 
     var selectedFolder by remember { mutableStateOf(FileFolders.UPLOAD) }
     var pendingDelete by remember { mutableStateOf<Set<Long>?>(null) }
+    // True when pendingDelete came from the unreferenced-attachment scan (different warning text).
+    var pendingUnreferenced by remember { mutableStateOf(false) }
     var selectedIds by remember { mutableStateOf(emptySet<Long>()) }
     var selecting by remember { mutableStateOf(false) }
     var busy by remember { mutableStateOf(false) }
@@ -119,7 +121,26 @@ fun SettingFilesPage(
                     val mode = cleanupMode
                     showCleanupSheet = false
 
-                    if (mode == CleanupMode.INVALID_ATTACHMENTS) {
+                    if (mode == CleanupMode.UNREFERENCED_ATTACHMENTS) {
+                        busy = true
+                        scope.launch {
+                            try {
+                                val targets = chatService.findUnreferencedAttachments()
+                                if (targets.isEmpty()) {
+                                    toaster.show("没有找到无人引用的附件")
+                                } else {
+                                    pendingUnreferenced = true
+                                    pendingDelete = targets
+                                }
+                            } catch (e: CancellationException) {
+                                throw e
+                            } catch (e: Exception) {
+                                toaster.show("扫描未完成，请重试")
+                            } finally {
+                                busy = false
+                            }
+                        }
+                    } else if (mode == CleanupMode.INVALID_ATTACHMENTS) {
                         busy = true
                         scope.launch {
                             try {
@@ -154,6 +175,7 @@ fun SettingFilesPage(
                         if (targets.isEmpty()) {
                             toaster.show("没有符合条件的文件")
                         } else {
+                            pendingUnreferenced = false
                             pendingDelete = targets
                         }
                     }
@@ -168,7 +190,16 @@ fun SettingFilesPage(
         AlertDialog(
             onDismissRequest = { if (!busy) pendingDelete = null },
             title = { Text(stringResource(R.string.setting_files_page_delete_file_title)) },
-            text = { Text("删除选中的 ${target.size} 个文件？共 ${formatBytes(totalSize)}。删除后无法恢复，聊天中的附件引用会相应移除，聊天文字会保留。") },
+            text = {
+                Text(
+                    if (pendingUnreferenced) {
+                        "找到 ${target.size} 个没有被任何聊天、收藏或设置引用的附件，共 ${formatBytes(totalSize)}。" +
+                            "通常是恢复聊天备份后留下的重复副本。手动上传但从未发进聊天的文件也会列在其中。删除后无法恢复。"
+                    } else {
+                        "删除选中的 ${target.size} 个文件？共 ${formatBytes(totalSize)}。删除后无法恢复，聊天中的附件引用会相应移除，聊天文字会保留。"
+                    }
+                )
+            },
             confirmButton = {
                 TextButton(
                     enabled = !busy,
@@ -339,6 +370,7 @@ private fun FolderRow(
 
 private enum class CleanupMode(val label: String) {
     INVALID_ATTACHMENTS("清理失效附件"),
+    UNREFERENCED_ATTACHMENTS("清理无人引用的附件"),
     OLDER_THAN_7_DAYS("7 天前"),
     OLDER_THAN_14_DAYS("14 天前"),
     OLDER_THAN_30_DAYS("30 天前"),
