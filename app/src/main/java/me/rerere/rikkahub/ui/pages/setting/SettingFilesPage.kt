@@ -101,6 +101,7 @@ fun SettingFilesPage(
     var pendingDelete by remember { mutableStateOf<Set<Long>?>(null) }
     // True when pendingDelete came from the unreferenced-attachment scan (different warning text).
     var pendingUnreferenced by remember { mutableStateOf(false) }
+    var pendingMerge by remember { mutableStateOf<ChatService.DuplicateAttachmentSummary?>(null) }
     var selectedIds by remember { mutableStateOf(emptySet<Long>()) }
     var selecting by remember { mutableStateOf(false) }
     var busy by remember { mutableStateOf(false) }
@@ -121,7 +122,21 @@ fun SettingFilesPage(
                     val mode = cleanupMode
                     showCleanupSheet = false
 
-                    if (mode == CleanupMode.UNREFERENCED_ATTACHMENTS) {
+                    if (mode == CleanupMode.MERGE_DUPLICATES) {
+                        busy = true
+                        scope.launch {
+                            try {
+                                val summary = chatService.previewDuplicateAttachments()
+                                if (summary.files == 0) toaster.show("没有找到重复的附件") else pendingMerge = summary
+                            } catch (e: CancellationException) {
+                                throw e
+                            } catch (e: Exception) {
+                                toaster.show("扫描未完成，请重试")
+                            } finally {
+                                busy = false
+                            }
+                        }
+                    } else if (mode == CleanupMode.UNREFERENCED_ATTACHMENTS) {
                         busy = true
                         scope.launch {
                             try {
@@ -182,6 +197,46 @@ fun SettingFilesPage(
                 },
             )
         }
+    }
+
+    pendingMerge?.let { summary ->
+        AlertDialog(
+            onDismissRequest = { if (!busy) pendingMerge = null },
+            title = { Text("合并重复附件？") },
+            text = {
+                Text(
+                    "找到 ${summary.files} 个与其他附件内容完全相同的副本，共 ${formatBytes(summary.bytes)}。" +
+                        "聊天里的引用会改指向保留的那一份，然后删除副本。图片和文字都不会丢失。" +
+                        "会修改聊天记录，建议先导出聊天备份。"
+                )
+            },
+            confirmButton = {
+                TextButton(enabled = !busy, onClick = {
+                    pendingMerge = null
+                    busy = true
+                    scope.launch {
+                        try {
+                            val result = chatService.mergeDuplicateAttachments()
+                            toaster.show(
+                                "已合并 ${result.removed} 个副本，释放 ${formatBytes(result.freedBytes)}" +
+                                    if (result.kept > 0) "；${result.kept} 个仍被收藏或打开的聊天引用，已保留" else ""
+                            )
+                        } catch (e: CancellationException) {
+                            throw e
+                        } catch (e: Exception) {
+                            toaster.show("合并未完成，已合并的部分保持有效，可重试")
+                        } finally {
+                            busy = false
+                        }
+                    }
+                }) { Text("合并") }
+            },
+            dismissButton = {
+                TextButton(enabled = !busy, onClick = { pendingMerge = null }) {
+                    Text(stringResource(R.string.setting_files_page_cancel_action))
+                }
+            },
+        )
     }
 
     if (pendingDelete != null) {
@@ -371,6 +426,7 @@ private fun FolderRow(
 private enum class CleanupMode(val label: String) {
     INVALID_ATTACHMENTS("清理失效附件"),
     UNREFERENCED_ATTACHMENTS("清理无人引用的附件"),
+    MERGE_DUPLICATES("合并重复附件"),
     OLDER_THAN_7_DAYS("7 天前"),
     OLDER_THAN_14_DAYS("14 天前"),
     OLDER_THAN_30_DAYS("30 天前"),

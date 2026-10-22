@@ -34,6 +34,8 @@ import me.rerere.rikkahub.data.files.FilesManager
 import me.rerere.rikkahub.data.files.attachmentUrls
 import me.rerere.rikkahub.data.files.localAttachmentFile
 import me.rerere.rikkahub.data.files.removeReferencedFileNames
+import me.rerere.rikkahub.data.files.DuplicateAttachmentPlan
+import me.rerere.rikkahub.data.files.remapDuplicateAttachments
 import me.rerere.rikkahub.data.datastore.SettingsStore
 import me.rerere.rikkahub.data.model.Conversation
 import me.rerere.rikkahub.data.model.MessageNode
@@ -599,6 +601,39 @@ class ConversationRepository(
     }
 
     suspend fun repairInvalidAttachments(): Int = repairInvalidAttachments { filesManager.validAttachments(it) }
+
+    /**
+     * Points every message-node reference to a planned duplicate at its byte-identical survivor.
+     * Only nodes that mention a duplicate name are read; each is rewritten with the same
+     * compare-and-set used by attachment repair, so a concurrent edit to that node wins.
+     * Returns the number of rewritten nodes.
+     */
+    internal suspend fun remapDuplicateAttachmentReferences(plan: DuplicateAttachmentPlan): Int =
+        withContext(Dispatchers.IO) {
+            if (plan.isEmpty) return@withContext 0
+            val ids = linkedSetOf<String>()
+            plan.canonicalByDuplicate.keys.toList().chunked(50).forEach { batch ->
+                val clauses = batch.joinToString(" OR ") { "instr(messages, ?) > 0" }
+                ids += messageNodeDAO.findNodeIdsRaw(SimpleSQLiteQuery(
+                    "SELECT id FROM message_node WHERE $clauses", batch.toTypedArray(),
+                ))
+            }
+            var rewritten = 0
+            for (id in ids) {
+                database.withTransaction {
+                    val entity = messageNodeDAO.loadCompleteNode(id) ?: return@withTransaction
+                    val original = JsonInstant.decodeFromString<List<UIMessage>>(entity.messages)
+                    check(original.isNotEmpty() && entity.selectIndex in original.indices) {
+                        "会话包含无法读取的消息，合并已停止，原始消息未被覆盖。"
+                    }
+                    val remapped = remapDuplicateAttachments(original, plan)
+                    if (remapped !== original) rewritten += messageNodeDAO.repairAttachments(
+                        id, entity.messages, JsonInstant.encodeToString(remapped),
+                    )
+                }
+            }
+            rewritten
+        }
 
     /**
      * Upload file names that no chat branch, favorite snapshot, conversation field or setting

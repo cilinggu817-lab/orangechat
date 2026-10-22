@@ -148,6 +148,7 @@ import me.rerere.rikkahub.web.NotFoundException
 import me.rerere.rikkahub.utils.applyPlaceholders
 import me.rerere.rikkahub.utils.sendNotification
 import me.rerere.rikkahub.utils.cancelNotification
+import java.io.File
 import java.time.Instant
 import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
@@ -2042,6 +2043,61 @@ class ChatService(
                 .mapNotNullTo(mutableSetOf()) { byName[it]?.id }
         }
     }
+
+    data class DuplicateAttachmentSummary(val files: Int, val bytes: Long)
+    data class DuplicateMergeResult(val removed: Int, val freedBytes: Long, val kept: Int, val rewrittenNodes: Int)
+
+    /** Read-only preview: how many upload files are byte-identical copies of another upload. */
+    suspend fun previewDuplicateAttachments(): DuplicateAttachmentSummary = attachmentMaintenanceMutex.withLock {
+        withContext(Dispatchers.IO) {
+            val plan = me.rerere.rikkahub.data.files.planDuplicateAttachments(uploadDirectory())
+            DuplicateAttachmentSummary(
+                plan.canonicalByDuplicate.size,
+                plan.canonicalByDuplicate.keys.sumOf { File(uploadDirectory(), it).length() },
+            )
+        }
+    }
+
+    /**
+     * Repoints chat references from each duplicate to its byte-identical survivor, then deletes
+     * duplicates nothing references any more. The plan is recomputed here rather than reused from
+     * the preview. Duplicates still held by an open session, a favorite snapshot or settings are
+     * kept (reported as [DuplicateMergeResult.kept]); a later run can collect them.
+     */
+    suspend fun mergeDuplicateAttachments(): DuplicateMergeResult = attachmentMaintenanceMutex.withLock {
+        withContext(Dispatchers.IO) {
+            val dir = uploadDirectory()
+            val plan = me.rerere.rikkahub.data.files.planDuplicateAttachments(dir)
+            if (plan.isEmpty) return@withContext DuplicateMergeResult(0, 0, 0, 0)
+            val rewritten = withContext(NonCancellable) { conversationRepo.remapDuplicateAttachmentReferences(plan) }
+            filesManager.syncFolder()
+            val entities = filesManager.list().associateBy { filesManager.getFile(it).name }
+            val sessionNames = buildSet {
+                sessions.values.toList().forEach { session ->
+                    if (!session.isDeleted) session.state.value.files.forEach { uri ->
+                        me.rerere.rikkahub.data.files.localAttachmentFile(uri.toString())?.let { add(it.name) }
+                    }
+                }
+            }
+            val unused = conversationRepo.findUnreferencedChatFileNames(plan.canonicalByDuplicate.keys - sessionNames)
+            var removed = 0
+            var freed = 0L
+            withContext(NonCancellable) {
+                unused.forEach { name ->
+                    val canonical = plan.canonicalByDuplicate.getValue(name)
+                    // Never delete a duplicate unless its survivor still exists with the same size.
+                    if (!canonical.isFile || canonical.length() != File(dir, name).length()) return@forEach
+                    val size = File(dir, name).length()
+                    val entity = entities[name]
+                    val deleted = if (entity != null) filesManager.delete(entity.id) else File(dir, name).delete()
+                    if (deleted) { removed++; freed += size }
+                }
+            }
+            DuplicateMergeResult(removed, freed, plan.canonicalByDuplicate.size - removed, rewritten)
+        }
+    }
+
+    private fun uploadDirectory(): File = context.filesDir.resolve(me.rerere.rikkahub.data.files.FileFolders.UPLOAD)
 
     private suspend fun refreshAttachmentReferences() = withContext(Dispatchers.Default) {
         sessions.values.toList().forEach { session ->
