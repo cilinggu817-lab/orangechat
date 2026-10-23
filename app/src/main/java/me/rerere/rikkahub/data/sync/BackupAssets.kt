@@ -25,7 +25,8 @@ internal fun isBackupFileEntry(name: String): Boolean =
 
 /**
  * Backup settings contain app-private absolute paths. Repoint paths whose files were actually
- * extracted so restores keep working across application IDs (for example, preview builds).
+ * extracted so restores keep working across application IDs (for example, preview builds). Remote
+ * URLs and paths whose files were not backed up are left untouched.
  */
 internal fun Settings.rebaseRestoredAssetPaths(
     filesDir: File,
