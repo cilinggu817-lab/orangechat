@@ -8,12 +8,18 @@ package me.rerere.ai.provider.providers
 
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import me.rerere.ai.core.MessageRole
+import me.rerere.ai.core.InputSchema
+import me.rerere.ai.core.Tool
+import me.rerere.ai.provider.Model
+import me.rerere.ai.provider.ModelAbility
+import me.rerere.ai.provider.TextGenerationParams
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
 import okhttp3.OkHttpClient
@@ -87,6 +93,42 @@ class GoogleProviderMessageTest {
             "real-signature",
             parsed.metadata?.get("thoughtSignature")?.jsonPrimitive?.content
         )
+    }
+
+    @Test
+    fun `native Gemini request exposes reaction choices to the model`() {
+        val choices = JsonArray(listOf(JsonPrimitive("(ᵕ—ᴗ—)"), JsonPrimitive("(≧▽≦)")))
+        val tool = Tool(
+            name = "message_reaction",
+            description = "React to a message",
+            parameters = {
+                InputSchema.Obj(
+                    properties = buildJsonObject {
+                        put("emoji", buildJsonObject {
+                            put("type", "string")
+                            put("enum", choices)
+                        })
+                    },
+                    required = listOf("emoji"),
+                )
+            },
+            execute = { emptyList() },
+        )
+        val method = GoogleProvider::class.java.getDeclaredMethod(
+            "buildCompletionRequestBody", List::class.java, TextGenerationParams::class.java
+        )
+        method.isAccessible = true
+        val body = method.invoke(
+            provider,
+            listOf(UIMessage.user("React")),
+            TextGenerationParams(
+                model = Model(modelId = "gemini-3-flash", abilities = listOf(ModelAbility.TOOL)),
+                tools = listOf(tool),
+            ),
+        ) as JsonObject
+        val parameters = body["tools"]!!.jsonArray.single().jsonObject["functionDeclarations"]!!
+            .jsonArray.single().jsonObject["parameters"]!!.jsonObject
+        assertEquals(choices, parameters["properties"]!!.jsonObject["emoji"]!!.jsonObject["enum"])
     }
 
     @Test

@@ -158,6 +158,36 @@ class ChatCompletionsAPIMessageTest {
     }
 
     @Test
+    fun `Gemini OpenAI request exposes reaction choices to the model`() {
+        val choices = JsonArray(listOf(JsonPrimitive("(ᵕ—ᴗ—)"), JsonPrimitive("(≧▽≦)")))
+        val tool = Tool(
+            name = "message_reaction",
+            description = "React to a message",
+            parameters = {
+                InputSchema.Obj(
+                    properties = buildJsonObject {
+                        put("emoji", buildJsonObject {
+                            put("type", "string")
+                            put("enum", choices)
+                        })
+                    },
+                    required = listOf("emoji"),
+                )
+            },
+            execute = { emptyList() },
+        )
+        val body = invokeBuildRequest(
+            TextGenerationParams(
+                model = Model(modelId = "gemini-3-flash", abilities = listOf(ModelAbility.TOOL)),
+                tools = listOf(tool),
+            )
+        )
+        val parameters = body["tools"]!!.jsonArray.single().jsonObject["function"]!!
+            .jsonObject["parameters"]!!.jsonObject
+        assertEquals(choices, parameters["properties"]!!.jsonObject["emoji"]!!.jsonObject["enum"])
+    }
+
+    @Test
     fun `Gemini OpenAI compatibility should add bypass for missing tool signature`() {
         val result = invokeBuildMessages(
             messages = listOf(

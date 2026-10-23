@@ -21,6 +21,59 @@ import org.junit.Test
 
 class GeminiSchemaTest {
     @Test
+    fun `preserves reaction choices and operations while stripping metadata`() {
+        val reactions = JsonArray(listOf(JsonPrimitive("(ᵕ—ᴗ—)"), JsonPrimitive("(≧▽≦)")))
+        val operations = JsonArray(listOf(JsonPrimitive("add"), JsonPrimitive("remove")))
+        val schema = buildJsonObject {
+            put("properties", buildJsonObject {
+                put("emoji", buildJsonObject {
+                    put("type", "string")
+                    put("title", "Reaction")
+                    put("enum", reactions)
+                })
+                put("operation", buildJsonObject {
+                    put("type", "string")
+                    put("enum", operations)
+                })
+            })
+        }.toGeminiFunctionParameters()
+
+        val properties = schema["properties"]!!.jsonObject
+        assertEquals(reactions, properties["emoji"]!!.jsonObject["enum"])
+        assertEquals(operations, properties["operation"]!!.jsonObject["enum"])
+        assertFalse("title" in properties["emoji"]!!.jsonObject)
+    }
+
+    @Test
+    fun `retains referenced nullable string enums in array items`() {
+        val choices = JsonArray(listOf(JsonPrimitive("list"), JsonPrimitive("add"), JsonPrimitive("remove")))
+        val schema = buildJsonObject {
+            put("properties", buildJsonObject {
+                put("operations", buildJsonObject {
+                    put("type", "array")
+                    put("items", buildJsonObject { put("\$ref", "#/\$defs/Operation") })
+                })
+            })
+            put("\$defs", buildJsonObject {
+                put("Operation", buildJsonObject {
+                    put("anyOf", buildJsonArray {
+                        add(buildJsonObject { put("type", "null") })
+                        add(buildJsonObject {
+                            put("type", "string")
+                            put("enum", choices)
+                        })
+                    })
+                })
+            })
+        }.toGeminiFunctionParameters()
+
+        val items = schema["properties"]!!.jsonObject["operations"]!!.jsonObject["items"]!!.jsonObject
+        assertEquals(choices, items["enum"])
+        assertEquals("string", items["type"]!!.jsonPrimitive.content)
+        assertFalse(containsKeyRecursively(schema, "\$ref"))
+    }
+
+    @Test
     fun `removes unsupported metadata and adds missing nullable type`() {
         val schema = buildJsonObject {
             put("type", "object")

@@ -117,6 +117,15 @@ android {
             buildConfigField("String", "GIT_COMMIT", "\"$gitCommit\"")
             buildConfigField("String", "BUILD_TIME", "\"$buildTime\"")
         }
+        // Optimized private test build: upgrades the existing test app without changing its data.
+        // The public debug key is for testing only; production release signing remains mandatory.
+        create("preview") {
+            initWith(getByName("release"))
+            matchingFallbacks.add("release")
+            signingConfig = signingConfigs.getByName("debug")
+            applicationIdSuffix = ".liquidglass"
+            isDebuggable = false
+        }
         create("baseline") {
             initWith(getByName("release"))
             matchingFallbacks.add("release")

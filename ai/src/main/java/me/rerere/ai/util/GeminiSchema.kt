@@ -70,6 +70,17 @@ private fun normalizeGeminiSchema(
             ?.let { put("description", it) }
 
         when (type) {
+            "string" -> {
+                // Enums are functional constraints, not disposable schema metadata. In particular,
+                // message_reaction uses them to expose the supported kaomoji to the model.
+                val choices = (expanded["enum"] as? JsonArray)
+                    ?.filterIsInstance<JsonPrimitive>()
+                    ?.filter { it.isString }
+                    ?.distinct()
+                    .orEmpty()
+                if (choices.isNotEmpty()) put("enum", JsonArray(choices))
+            }
+
             "object" -> {
                 val sourceProperties = expanded["properties"] as? JsonObject ?: JsonObject(emptyMap())
                 val normalizedProperties = buildJsonObject {

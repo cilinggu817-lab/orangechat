@@ -46,8 +46,21 @@ jobs:
         run: pnpm install --frozen-lockfile
       - name: Test regressions and compile device tests
         run: bash gradlew :app:testDebugUnitTest :ai:testDebugUnitTest :search:testDebugUnitTest :workspace:testDebugUnitTest :app:compileDebugAndroidTestKotlin
-      - name: Build debug APK
-        run: bash gradlew :app:assembleDebug -PorangechatAbis=arm64-v8a -PorangechatUniversalApk=false
+      - name: Build optimized test APK
+        run: bash gradlew :app:assemblePreview -PorangechatAbis=arm64-v8a -PorangechatUniversalApk=false
+      - name: Verify test package identity and optimization
+        shell: bash
+        run: |
+          set -euo pipefail
+          build_tools=$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n 1)
+          apk=$(find app/build/outputs/apk/preview -name '*.apk' -print -quit)
+          test -n "$apk"
+          "$build_tools/aapt" dump badging "$apk" > /tmp/preview-badging.txt
+          grep -q "package: name='me.rerere.orangechat.liquidglass'" /tmp/preview-badging.txt
+          if grep -q 'application-debuggable' /tmp/preview-badging.txt; then exit 1; fi
+          "$build_tools/apksigner" verify --print-certs "$apk" > /tmp/preview-signing.txt
+          grep -qi 'ff516315e577235b64ff356dbc856c053b7e589ae636dd8bc4301e528b46d116' /tmp/preview-signing.txt
+          test -s app/build/outputs/mapping/preview/mapping.txt
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -55,5 +68,6 @@ jobs:
           path: |
             app/build/reports/tests/
             ai/build/reports/tests/
-            app/build/outputs/apk/debug/*.apk
+            app/build/outputs/apk/preview/*.apk
+            app/build/outputs/mapping/preview/mapping.txt
           retention-days: 7
