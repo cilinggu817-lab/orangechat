@@ -71,6 +71,30 @@ class ChatInteractionsTest {
         assertEquals("(ᵕ—ᴗ—)", receivedValue)
         assertTrue(payload["success"]!!.jsonPrimitive.boolean)
         assertEquals("(ᵕ—ᴗ—)", payload["presets"]!!.jsonArray.single().jsonPrimitive.content)
+        val available = payload["available_presets"]!!.jsonArray.map { it.jsonPrimitive.content }
+        assertTrue(available.containsAll(CHAT_REACTION_KAOMOJI))
+        assertTrue("(ᵕ—ᴗ—)" in available)
+    }
+
+    @Test
+    fun `listing reactions exposes built-ins even without custom presets`() = runBlocking {
+        val tool = buildChatInteractionTools(
+            assistant = Assistant(enableMessageReactions = true),
+            onAvatar = { "avatar" },
+            onReaction = { _, _, _, _ -> },
+            onManageReactionPresets = { operation, _ ->
+                assertEquals("list", operation)
+                ReactionPresetToolResult(true, "Loaded 0 custom kaomoji presets.", emptyList())
+            },
+        ).single { it.name == "reaction_preset" }
+        val output = tool.execute(buildJsonObject { put("operation", "list") })
+        val payload = Json.parseToJsonElement((output.single() as UIMessagePart.Text).text).jsonObject
+
+        assertTrue(payload["presets"]!!.jsonArray.isEmpty())
+        assertEquals(
+            CHAT_REACTION_KAOMOJI,
+            payload["available_presets"]!!.jsonArray.map { it.jsonPrimitive.content },
+        )
     }
 
     @Test

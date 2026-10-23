@@ -92,8 +92,9 @@ fun buildChatInteractionTools(
     if (assistant.enableMessageReactions) add(
         Tool(
             name = "reaction_preset",
-            description = "List, add, or remove global custom kaomoji presets used by the user's " +
-                "message-reaction picker. Only modify presets when the user explicitly asks to save " +
+            description = "List available kaomoji reactions, or add/remove global custom presets used by the user's " +
+                "message-reaction picker. available_presets includes built-in and custom choices; presets contains " +
+                "only custom choices. Only modify presets when the user explicitly asks to save " +
                 "or remove one. Built-in presets cannot be removed.",
             parameters = {
                 InputSchema.Obj(properties = buildJsonObject {
@@ -121,6 +122,9 @@ fun buildChatInteractionTools(
                     put("success", result.success)
                     put("message", result.message)
                     put("presets", buildJsonArray { result.presets.forEach { add(it) } })
+                    put("available_presets", buildJsonArray {
+                        effectiveChatReactionPresets(result.presets).forEach { add(it) }
+                    })
                 }.toString()))
             },
         )
