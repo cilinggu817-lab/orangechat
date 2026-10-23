@@ -36,7 +36,9 @@ internal class BackupArchiveRestorer(
                     val settings = staged.settings?.let {
                         json.decodeFromString<Settings>(SettingsJsonMigrator.migrate(it)).let { restored ->
                             check(!restored.init) { "Cannot restore dummy settings" }
-                            restored.copy(autoBackupConfig = restored.autoBackupConfig.forRestore())
+                            restored
+                                .rebaseRestoredAssetPaths(context.filesDir, staged.files)
+                                .copy(autoBackupConfig = restored.autoBackupConfig.forRestore())
                         }
                     }
                     val plugins = staged.pluginSettings?.let { json.decodeFromString<PluginSettingsExport>(it) }

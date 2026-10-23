@@ -45,7 +45,7 @@ internal suspend fun stageBackupArchive(
                         val destination = when {
                             restoreDatabase && name in listOf("rikka_hub.db", "rikka_hub-wal", "rikka_hub-shm") ->
                                 "$databaseDirectory/${if (name == "rikka_hub.db") "rikka_hub" else name}"
-                            restoreFiles && (name.startsWith("upload/") || name.startsWith("skills/")) -> "files/$name"
+                            restoreFiles && isBackupFileEntry(name) -> "files/$name"
                             restoreFiles && includePlugins && name.startsWith("plugins/") -> "files/$name"
                             restoreFiles && includePlugins && name.startsWith("Orangechat/plugins/") ->
                                 "files/${name.removePrefix("Orangechat/")}"

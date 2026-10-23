@@ -14,6 +14,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import me.rerere.rikkahub.data.files.FileFolders
 import me.rerere.rikkahub.data.sync.BackupArchiveRestorer
+import me.rerere.rikkahub.data.sync.BACKUP_APPEARANCE_DIRECTORIES
 import me.rerere.rikkahub.data.sync.DatabaseBackupCoordinator
 import me.rerere.rikkahub.data.datastore.SettingsStore
 import me.rerere.rikkahub.data.datastore.WebDavConfig
@@ -195,6 +196,18 @@ class WebDavSync(
                         )
                     } else {
                         Log.w(TAG, "prepareBackupFile: Skills folder does not exist or is not a directory")
+                    }
+
+                    BACKUP_APPEARANCE_DIRECTORIES.forEach { directoryName ->
+                        val directory = File(context.filesDir, directoryName)
+                        if (directory.isDirectory) {
+                            addDirectoryToZip(
+                                zipOut = zipOut,
+                                rootDir = directory,
+                                currentDir = directory,
+                                entryPrefix = "$directoryName/",
+                            )
+                        }
                     }
 
                     // Backup plugin settings and plugin folders (only for local backup/export)

@@ -165,6 +165,18 @@ class S3Sync(
                     } else {
                         Log.w(TAG, "prepareBackupFile: Skills folder does not exist or is not a directory")
                     }
+
+                    BACKUP_APPEARANCE_DIRECTORIES.forEach { directoryName ->
+                        val directory = File(context.filesDir, directoryName)
+                        if (directory.isDirectory) {
+                            addDirectoryToZip(
+                                zipOut = zipOut,
+                                rootDir = directory,
+                                currentDir = directory,
+                                entryPrefix = "$directoryName/",
+                            )
+                        }
+                    }
                 }
             }
         } catch (e: Exception) {
