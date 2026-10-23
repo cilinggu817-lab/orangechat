@@ -1,6 +1,8 @@
 name: Android regression checks
 
 on:
+  push:
+    branches: [fix/gemini-mcp-compat]
   pull_request:
     branches: [master]
     paths:

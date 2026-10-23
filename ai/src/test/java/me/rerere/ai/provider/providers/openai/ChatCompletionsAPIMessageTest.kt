@@ -7,10 +7,13 @@
 package me.rerere.ai.provider.providers.openai
 
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.put
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.provider.Model
 import me.rerere.ai.provider.Modality
@@ -49,6 +52,96 @@ class ChatCompletionsAPIMessageTest {
         )
         method.isAccessible = true
         return method.invoke(api, messages, model) as JsonArray
+    }
+
+    private fun invokeParseMessage(message: JsonObject): UIMessage {
+        val method = ChatCompletionsAPI::class.java.getDeclaredMethod(
+            "parseMessage",
+            JsonObject::class.java
+        )
+        method.isAccessible = true
+        return method.invoke(api, message) as UIMessage
+    }
+
+    @Test
+    fun `OpenAI compatibility response parser should preserve Gemini thought signature`() {
+        val parsed = invokeParseMessage(buildJsonObject {
+            put("role", "assistant")
+            put("content", "")
+            put("tool_calls", kotlinx.serialization.json.buildJsonArray {
+                add(buildJsonObject {
+                    put("id", "call_1")
+                    put("type", "function")
+                    put("function", buildJsonObject {
+                        put("name", "message_reaction")
+                        put("arguments", "{}")
+                    })
+                    put("extra_content", buildJsonObject {
+                        put("google", buildJsonObject {
+                            put("thought_signature", "real-signature")
+                        })
+                    })
+                })
+            })
+        })
+
+        assertEquals(
+            "real-signature",
+            parsed.getTools().single().metadata?.get("thoughtSignature")?.jsonPrimitive?.content
+        )
+    }
+
+    @Test
+    fun `Gemini OpenAI compatibility should add bypass for missing tool signature`() {
+        val result = invokeBuildMessages(
+            messages = listOf(
+                UIMessage.user("React"),
+                UIMessage(
+                    role = MessageRole.ASSISTANT,
+                    parts = listOf(
+                        createExecutedTool("call_1", "message_reaction", "{}", "ok"),
+                        createExecutedTool("call_2", "other_tool", "{}", "done")
+                    )
+                )
+            ),
+            model = Model(modelId = "google/gemini-3.1-pro-preview")
+        )
+        val calls = result
+            .first { it.jsonObject.containsKey("tool_calls") }
+            .jsonObject["tool_calls"]!!.jsonArray
+
+        assertEquals(
+            "skip_thought_signature_validator",
+            calls[0].jsonObject["extra_content"]!!.jsonObject["google"]!!
+                .jsonObject["thought_signature"]!!.jsonPrimitive.content
+        )
+        assertTrue(
+            "Only the first call in a parallel group should receive the fallback",
+            !calls[1].jsonObject.containsKey("extra_content")
+        )
+    }
+
+    @Test
+    fun `Gemini OpenAI compatibility should preserve real tool signature`() {
+        val signedTool = createExecutedTool("call_1", "message_reaction", "{}", "ok").copy(
+            metadata = buildJsonObject { put("thoughtSignature", "real-signature") }
+        )
+        val result = invokeBuildMessages(
+            messages = listOf(
+                UIMessage.user("React"),
+                UIMessage(role = MessageRole.ASSISTANT, parts = listOf(signedTool))
+            ),
+            model = Model(modelId = "gemini-3-flash")
+        )
+        val call = result
+            .first { it.jsonObject.containsKey("tool_calls") }
+            .jsonObject["tool_calls"]!!.jsonArray.single().jsonObject
+
+        assertEquals(
+            "real-signature",
+            call["extra_content"]!!.jsonObject["google"]!!
+                .jsonObject["thought_signature"]!!.jsonPrimitive.content
+        )
     }
 
     @Test

@@ -7,9 +7,12 @@
 package me.rerere.ai.provider.providers
 
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.put
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
@@ -46,6 +49,95 @@ class GoogleProviderMessageTest {
         )
         method.isAccessible = true
         return method.invoke(provider, messages) as JsonArray
+    }
+
+    private fun invokeBuildContents(
+        messages: List<UIMessage>,
+        requireThoughtSignature: Boolean
+    ): JsonArray {
+        val method = GoogleProvider::class.java.getDeclaredMethod(
+            "buildContents",
+            List::class.java,
+            Boolean::class.javaPrimitiveType!!
+        )
+        method.isAccessible = true
+        return method.invoke(provider, messages, requireThoughtSignature) as JsonArray
+    }
+
+    private fun invokeParseMessagePart(part: JsonObject): UIMessagePart {
+        val method = GoogleProvider::class.java.getDeclaredMethod(
+            "parseMessagePart",
+            JsonObject::class.java
+        )
+        method.isAccessible = true
+        return method.invoke(provider, part) as UIMessagePart
+    }
+
+    @Test
+    fun `Google response parser should preserve snake case thought signature`() {
+        val parsed = invokeParseMessagePart(buildJsonObject {
+            put("functionCall", buildJsonObject {
+                put("name", "message_reaction")
+                put("args", buildJsonObject {})
+            })
+            put("thought_signature", "real-signature")
+        }) as UIMessagePart.Tool
+
+        assertEquals(
+            "real-signature",
+            parsed.metadata?.get("thoughtSignature")?.jsonPrimitive?.content
+        )
+    }
+
+    @Test
+    fun `Gemini 3 history should add documented bypass when first tool signature is missing`() {
+        val assistantMessage = UIMessage(
+            role = MessageRole.ASSISTANT,
+            parts = listOf(
+                createExecutedTool("call_1", "message_reaction", "{}", "ok"),
+                createExecutedTool("call_2", "other_tool", "{}", "done")
+            )
+        )
+
+        val result = invokeBuildContents(
+            messages = listOf(UIMessage.user("React"), assistantMessage),
+            requireThoughtSignature = true
+        )
+        val calls = result
+            .flatMap { it.jsonObject["parts"]?.jsonArray.orEmpty() }
+            .filter { it.jsonObject.containsKey("functionCall") }
+
+        assertEquals(
+            "skip_thought_signature_validator",
+            calls[0].jsonObject["thoughtSignature"]?.jsonPrimitive?.content
+        )
+        assertTrue(
+            "Only the first call in a parallel group should receive the fallback",
+            !calls[1].jsonObject.containsKey("thoughtSignature")
+        )
+    }
+
+    @Test
+    fun `real thought signature should be preserved instead of bypass`() {
+        val signedTool = createExecutedTool("call_1", "message_reaction", "{}", "ok").copy(
+            metadata = buildJsonObject { put("thoughtSignature", "real-signature") }
+        )
+
+        val result = invokeBuildContents(
+            messages = listOf(
+                UIMessage.user("React"),
+                UIMessage(role = MessageRole.ASSISTANT, parts = listOf(signedTool))
+            ),
+            requireThoughtSignature = true
+        )
+        val call = result
+            .flatMap { it.jsonObject["parts"]?.jsonArray.orEmpty() }
+            .first { it.jsonObject.containsKey("functionCall") }
+
+        assertEquals(
+            "real-signature",
+            call.jsonObject["thoughtSignature"]?.jsonPrimitive?.content
+        )
     }
 
     @Test

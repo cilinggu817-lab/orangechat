@@ -74,6 +74,7 @@ import okhttp3.sse.EventSources
 import kotlin.time.Clock
 
 private const val TAG = "ChatCompletionsAPI"
+private const val THOUGHT_SIGNATURE_VALIDATION_BYPASS = "skip_thought_signature_validator"
 
 class ChatCompletionsAPI(
     private val client: OkHttpClient,
@@ -641,14 +642,24 @@ class ChatCompletionsAPI(
 
         filteredMessages.forEach { message ->
             if (message.role == MessageRole.ASSISTANT) {
-                addAssistantMessages(message, includeReasoning = true, supportsImage = supportsImage)
+                addAssistantMessages(
+                    message = message,
+                    includeReasoning = true,
+                    supportsImage = supportsImage,
+                    requireThoughtSignature = requiresThoughtSignature(model.modelId)
+                )
             } else {
                 addNonAssistantMessage(message, supportsImage = supportsImage)
             }
         }
     }
 
-    private fun JsonArrayBuilder.addAssistantMessages(message: UIMessage, includeReasoning: Boolean, supportsImage: Boolean = true) {
+    private fun JsonArrayBuilder.addAssistantMessages(
+        message: UIMessage,
+        includeReasoning: Boolean,
+        supportsImage: Boolean = true,
+        requireThoughtSignature: Boolean = false
+    ) {
         val groups = groupPartsByToolBoundary(message.parts)
         val contentBuffer = mutableListOf<UIMessagePart>()
         var reasoningPart: UIMessagePart.Reasoning? = null
@@ -674,6 +685,7 @@ class ChatCompletionsAPI(
                         tools = group.tools,
                         reasoningPart = reasoningPart,
                         supportsImage = supportsImage,
+                        requireThoughtSignature = requireThoughtSignature,
                     )?.let { assistantMessage ->
                         add(assistantMessage)
                     }
@@ -776,6 +788,7 @@ class ChatCompletionsAPI(
         tools: List<UIMessagePart.Tool>,
         reasoningPart: UIMessagePart.Reasoning?,
         supportsImage: Boolean = true,
+        requireThoughtSignature: Boolean = false,
     ): JsonObject? {
         val hasUsableContent = contentParts.any { part ->
             when (part) {
@@ -840,7 +853,7 @@ class ChatCompletionsAPI(
             // tool_calls
             if (tools.isNotEmpty()) {
                 put("tool_calls", buildJsonArray {
-                    tools.forEach { tool ->
+                    tools.forEachIndexed { index, tool ->
                         add(buildJsonObject {
                             put("id", tool.toolCallId)
                             put("type", "function")
@@ -848,6 +861,19 @@ class ChatCompletionsAPI(
                                 put("name", tool.toolName)
                                 put("arguments", tool.input)
                             })
+                            val thoughtSignature = tool.thoughtSignatureOrNull()
+                                ?: if (requireThoughtSignature && index == 0) {
+                                    THOUGHT_SIGNATURE_VALIDATION_BYPASS
+                                } else {
+                                    null
+                                }
+                            thoughtSignature?.let {
+                                put("extra_content", buildJsonObject {
+                                    put("google", buildJsonObject {
+                                        put("thought_signature", it)
+                                    })
+                                })
+                            }
                         })
                     }
                 })
@@ -936,19 +962,24 @@ class ChatCompletionsAPI(
                     )
                 }
                 toolCalls.forEach { toolCalls ->
-                    val type = toolCalls.jsonObject["type"]?.jsonPrimitive?.contentOrNull
+                    val toolCall = toolCalls.jsonObject
+                    val type = toolCall["type"]?.jsonPrimitive?.contentOrNull
                     if (!type.isNullOrEmpty() && type != "function") error("tool call type not supported: $type")
-                    val toolCallId = toolCalls.jsonObject["id"]?.jsonPrimitive?.contentOrNull
+                    val toolCallId = toolCall["id"]?.jsonPrimitive?.contentOrNull
                     val toolName =
-                        toolCalls.jsonObject["function"]?.jsonObject?.get("name")?.jsonPrimitive?.contentOrNull
+                        toolCall["function"]?.jsonObject?.get("name")?.jsonPrimitive?.contentOrNull
                     val arguments =
-                        toolCalls.jsonObject["function"]?.jsonObject?.get("arguments")?.jsonPrimitive?.contentOrNull
+                        toolCall["function"]?.jsonObject?.get("arguments")?.jsonPrimitive?.contentOrNull
+                    val thoughtSignature = toolCall.openAIThoughtSignatureOrNull()
                     add(
                         UIMessagePart.Tool(
                             toolCallId = toolCallId ?: "",
                             toolName = toolName ?: "",
                             input = arguments ?: "",
-                            output = emptyList()
+                            output = emptyList(),
+                            metadata = thoughtSignature?.let {
+                                buildJsonObject { put("thoughtSignature", it) }
+                            }
                         )
                     )
                 }
@@ -987,6 +1018,24 @@ class ChatCompletionsAPI(
                 else -> error("unknown annotation type: $type")
             }
         }
+    }
+
+    private fun UIMessagePart.Tool.thoughtSignatureOrNull(): String? =
+        metadata?.get("thoughtSignature")?.jsonPrimitive?.contentOrNull
+            ?: metadata?.get("thought_signature")?.jsonPrimitive?.contentOrNull
+
+    private fun JsonObject.openAIThoughtSignatureOrNull(): String? =
+        this["extra_content"]?.jsonObjectOrNull
+            ?.get("google")?.jsonObjectOrNull
+            ?.get("thought_signature")?.jsonPrimitiveOrNull?.contentOrNull
+            ?: this["thought_signature"]?.jsonPrimitiveOrNull?.contentOrNull
+            ?: this["thoughtSignature"]?.jsonPrimitiveOrNull?.contentOrNull
+
+    private fun requiresThoughtSignature(modelId: String): Boolean {
+        val normalized = modelId.lowercase()
+        return Regex("gemini[-._/ ]+[34](?:[^0-9]|$)").containsMatchIn(normalized) ||
+            normalized.contains("gemini-flash-latest") ||
+            normalized.contains("gemini-pro-latest")
     }
 
     private fun parseTokenUsage(jsonObject: JsonObject?): TokenUsage? {

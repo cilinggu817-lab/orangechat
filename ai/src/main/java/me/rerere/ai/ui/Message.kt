@@ -43,14 +43,18 @@ data class UIMessage(
             var newParts = delta.parts.fold(parts) { acc, deltaPart ->
                 when (deltaPart) {
                     is UIMessagePart.Text -> {
-                        // Skip empty text deltas
-                        if (deltaPart.text.isEmpty()) {
+                        // A Gemini streaming part may carry only a thought signature and an
+                        // empty text value. Keep that metadata so it survives history replay.
+                        if (deltaPart.text.isEmpty() && deltaPart.metadata == null) {
                             acc
                         } else {
                             val lastPart = acc.lastOrNull()
                             if (lastPart is UIMessagePart.Text) {
                                 // Append to the last Text part
-                                acc.dropLast(1) + lastPart.copy(text = lastPart.text + deltaPart.text)
+                                acc.dropLast(1) + lastPart.copy(
+                                    text = lastPart.text + deltaPart.text,
+                                    metadata = deltaPart.metadata ?: lastPart.metadata
+                                )
                             } else {
                                 // Create new Text part
                                 acc + deltaPart
