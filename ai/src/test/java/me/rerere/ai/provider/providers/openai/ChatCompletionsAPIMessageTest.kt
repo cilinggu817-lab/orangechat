@@ -14,9 +14,14 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
+import me.rerere.ai.core.InputSchema
 import me.rerere.ai.core.MessageRole
+import me.rerere.ai.core.Tool
 import me.rerere.ai.provider.Model
+import me.rerere.ai.provider.ModelAbility
 import me.rerere.ai.provider.Modality
+import me.rerere.ai.provider.ProviderSetting
+import me.rerere.ai.provider.TextGenerationParams
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
 import me.rerere.ai.util.KeyRoulette
@@ -61,6 +66,67 @@ class ChatCompletionsAPIMessageTest {
         )
         method.isAccessible = true
         return method.invoke(api, message) as UIMessage
+    }
+
+    private fun invokeBuildRequest(
+        params: TextGenerationParams,
+        providerSetting: ProviderSetting.OpenAI = ProviderSetting.OpenAI(),
+    ): JsonObject {
+        val method = ChatCompletionsAPI::class.java.getDeclaredMethod(
+            "buildChatCompletionRequest",
+            List::class.java,
+            TextGenerationParams::class.java,
+            ProviderSetting.OpenAI::class.java,
+            Boolean::class.javaPrimitiveType!!,
+        )
+        method.isAccessible = true
+        return method.invoke(api, listOf(UIMessage.user("test")), params, providerSetting, false) as JsonObject
+    }
+
+    @Test
+    fun `Gemini OpenAI compatibility should normalize MCP tool schema`() {
+        val tool = Tool(
+            name = "propose_memory",
+            description = "Propose a memory",
+            parameters = {
+                InputSchema.Obj(
+                    properties = buildJsonObject {
+                        put("draft", buildJsonObject { put("\$ref", "#/\$defs/Draft") })
+                    },
+                    required = listOf("draft"),
+                    defs = buildJsonObject {
+                        put("Draft", buildJsonObject {
+                            put("type", "object")
+                            put("properties", buildJsonObject {
+                                put("identifier", buildJsonObject {
+                                    put("title", "Identifier")
+                                    put("anyOf", kotlinx.serialization.json.buildJsonArray {
+                                        add(buildJsonObject { put("type", "string") })
+                                        add(buildJsonObject { put("type", "null") })
+                                    })
+                                })
+                            })
+                        })
+                    },
+                )
+            },
+            execute = { emptyList() },
+        )
+        val body = invokeBuildRequest(
+            TextGenerationParams(
+                model = Model(modelId = "gemini-3-flash", abilities = listOf(ModelAbility.TOOL)),
+                tools = listOf(tool),
+            )
+        )
+
+        val parameters = body["tools"]!!.jsonArray.single().jsonObject["function"]!!
+            .jsonObject["parameters"]!!.jsonObject
+        val draft = parameters["properties"]!!.jsonObject["draft"]!!.jsonObject
+        val identifier = draft["properties"]!!.jsonObject["identifier"]!!.jsonObject
+        assertEquals("object", draft["type"]!!.jsonPrimitive.content)
+        assertEquals("string", identifier["type"]!!.jsonPrimitive.content)
+        assertTrue("title must be removed", "title" !in identifier)
+        assertTrue("references must be inlined", "\$ref" !in draft && "\$defs" !in parameters)
     }
 
     @Test

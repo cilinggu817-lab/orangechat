@@ -57,6 +57,7 @@ import me.rerere.ai.util.json
 import me.rerere.ai.util.mergeCustomBody
 import me.rerere.ai.util.parseErrorDetail
 import me.rerere.ai.util.stringSafe
+import me.rerere.ai.util.toGeminiFunctionParameters
 import me.rerere.ai.util.toHeaders
 import me.rerere.common.http.await
 import me.rerere.common.http.jsonArrayOrNull
@@ -577,7 +578,16 @@ class ChatCompletionsAPI(
                                 // Fall back to an empty object schema so the request is always valid.
                                 val schema = tool.parameters()
                                 if (schema != null) {
-                                    put("parameters", json.encodeToJsonElement(schema))
+                                    val encodedSchema = json.encodeToJsonElement(schema)
+                                    val parameters = if (
+                                        host == "generativelanguage.googleapis.com" ||
+                                        params.model.modelId.contains("gemini", ignoreCase = true)
+                                    ) {
+                                        encodedSchema.toGeminiFunctionParameters()
+                                    } else {
+                                        encodedSchema
+                                    }
+                                    put("parameters", parameters)
                                 } else {
                                     put("parameters", buildJsonObject {
                                         put("type", "object")
