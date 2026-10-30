@@ -129,6 +129,16 @@ android {
             isDebuggable = false
             isProfileable = true
         }
+        // Install alongside the signed production app while relay compatibility
+        // is verified on-device. This variant cannot overwrite production data.
+        create("httpcompat") {
+            initWith(getByName("release"))
+            matchingFallbacks.add("release")
+            applicationIdSuffix = ".httpcompat"
+            versionNameSuffix = "-httpcompat"
+            signingConfig = signingConfigs.getByName("debug")
+            isDebuggable = false
+        }
         create("baseline") {
             initWith(getByName("release"))
             matchingFallbacks.add("release")
