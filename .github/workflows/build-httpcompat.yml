@@ -1,0 +1,70 @@
+name: Build HTTP Relay Compatibility APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - fix/http2-relay-compat-2.2.7-20261030
+    paths:
+      - '.github/workflows/build-httpcompat.yml'
+      - 'ai/**'
+      - 'app/**'
+      - 'common/**'
+      - 'gradle/**'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fetch color utilities
+        run: git submodule update --init --depth 1 material3/material-color-utilities
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+      - uses: android-actions/setup-android@v3
+      - name: Install Android build components
+        run: sdkmanager 'platforms;android-37.0' 'build-tools;36.0.0' 'ndk;28.2.13676358' 'cmake;3.22.1'
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: pnpm
+          cache-dependency-path: web-ui/pnpm-lock.yaml
+      - name: Build bundled web UI
+        working-directory: web-ui
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm run build
+      - name: Test provider transport
+        run: bash gradlew :ai:testDebugUnitTest --tests me.rerere.ai.provider.ProviderHttpClientTest --max-workers=2 -Pkotlin.compiler.execution.strategy=in-process
+      - name: Build independently installable ARM64 APK
+        run: bash gradlew :app:assembleHttpcompat -PorangechatAbis=arm64-v8a -PorangechatUniversalApk=false --max-workers=2 -Pkotlin.compiler.execution.strategy=in-process -x :web:buildWebUi
+      - name: Verify bundled OCR and package
+        run: |
+          python3 tools/verify_bundled_ocr.py app/build/outputs/apk/httpcompat/*arm64-v8a*.apk
+          mkdir -p deliverables
+          cp app/build/outputs/apk/httpcompat/*arm64-v8a*.apk deliverables/OrangeChat-2.2.7-HTTP-Compat-arm64.apk
+          cp docs/http2-relay-compatibility.md deliverables/BUILD-NOTES.md
+          sha256sum deliverables/*.apk > deliverables/SHA256SUMS.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: OrangeChat-2.2.7-HTTP-Compat-arm64
+          path: deliverables/
+          if-no-files-found: error
+          retention-days: 30
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: httpcompat-test-results
+          path: ai/build/test-results/testDebugUnitTest/
+          if-no-files-found: ignore
